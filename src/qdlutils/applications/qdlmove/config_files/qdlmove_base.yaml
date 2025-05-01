@@ -1,28 +1,28 @@
 QDLMOVE:
   Positioners:      # Add positioner configs defiend below; edit the GUI/application accordingly.
-    # - MicroX
-    # - MicroY
+    - MicroX
+    - MicroY
     - PiezoX
     - PiezoY
     - PiezoZ
 
-  # MicroX:
-  #   import_path : qdlutils.hardware.micrometers.newportmicrometer
-  #   class_name  : NewportMicrometer
-  #   configure :
-  #     port: COM4      # Serial port name
-  #     min: 0.0        # Minimum position in microns
-  #     max: 25000.0    # Maximum position in microns
-  #     timeout: 10     # Time in seconds before timing out on movement
+  MicroX:
+    import_path : qdlutils.hardware.micrometers.newportmicrometer
+    class_name  : NewportMicrometer
+    configure :
+      port: COM4      # Serial port name
+      min: 0.0        # Minimum position in microns
+      max: 25000.0    # Maximum position in microns
+      timeout: 10     # Time in seconds before timing out on movement
 
-  # MicroY:
-  #   import_path : qdlutils.hardware.micrometers.newportmicrometer
-  #   class_name  : NewportMicrometer
-  #   configure :
-  #     port: COM5      # Serial port name
-  #     min: 0.0        # Minimum position in microns
-  #     max: 25000.0    # Maximum position in microns
-  #     timeout: 10     # Time in seconds before timing out on movement
+  MicroY:
+    import_path : qdlutils.hardware.micrometers.newportmicrometer
+    class_name  : NewportMicrometer
+    configure :
+      port: COM5      # Serial port name
+      min: 0.0        # Minimum position in microns
+      max: 25000.0    # Maximum position in microns
+      timeout: 10     # Time in seconds before timing out on movement
 
   PiezoX:
     import_path : qdlutils.hardware.nidaq.analogoutputs.nidaqposition
