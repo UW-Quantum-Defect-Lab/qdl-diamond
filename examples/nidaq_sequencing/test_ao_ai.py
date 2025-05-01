@@ -2,7 +2,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import time
 
-from qdlutils.hardware.nidaq.synchronous.ao_ai import AnalogOutputAnalogInput
+from qdlutils.hardware.nidaq.synchronous.sequence_ao_ai import SequenceAOVoltageAIVoltage
 
 
 '''
@@ -25,15 +25,13 @@ Some notes on the performance of the script:
 def main():
 
     # Create an experiment for synchronous AO/AI voltage signals.
-    exp = AnalogOutputAnalogInput(
+    exp = SequenceAOVoltageAIVoltage(
         ao_device = 'Dev1',
         ao_channel = 'ao0',
         ai_device = 'Dev1',
         ai_channel = 'ai1',
         ao_min_voltage = -5.0,
         ao_max_voltage = 5.0,
-        ai_min_voltage = -5.0,
-        ai_max_voltage = 5.0
     )
 
     # Number of samples in the sequence
@@ -54,7 +52,8 @@ def main():
     exp.run_sequence(
         data = data_y,
         sample_rate=sample_rate,
-        soft_start=True
+        soft_start=True,
+        readout_delay=1
     )
     end_time = time.time()
 
@@ -64,7 +63,7 @@ def main():
 
     # Plot the results
     plt.plot(np.arange(n_samples), data_y, 'k--', label='AO voltage')
-    plt.plot(np.arange(n_samples), exp.data, label='AI voltage')
+    plt.plot(np.arange(n_samples), exp.ai_data, label='AI voltage')
     plt.xlabel('Sample number')
     plt.ylabel('Voltage')
     plt.show()

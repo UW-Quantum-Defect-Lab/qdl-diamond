@@ -2,10 +2,12 @@ import logging
 import numpy as np
 import nidaqmx
 
+from qdlutils.hardware.nidaq.synchronous.sequence import Sequence
+
 logger = logging.getLogger(__name__)
 
 
-class AnalogOutputAnalogInput:
+class SequenceAOVoltageAIVoltage(Sequence):
     '''
     This class implements synchronus analog voltage output (AO) and analog voltage input (AI) tasks 
     mediated by an internal clock.
@@ -19,8 +21,6 @@ class AnalogOutputAnalogInput:
             ai_channel: str = 'ai0',
             ao_min_voltage: float = -5.0,
             ao_max_voltage: float = 5.0,
-            ai_min_voltage: float = -5.0,
-            ai_max_voltage: float = 5.0
     ) -> None:
         
         self.ao_device = ao_device
@@ -29,20 +29,29 @@ class AnalogOutputAnalogInput:
         self.ai_channel = ai_channel
         self.ao_min_voltage = ao_min_voltage
         self.ao_max_voltage = ao_max_voltage
-        self.ai_min_voltage = ai_min_voltage
-        self.ai_max_voltage = ai_max_voltage
 
 
         # Buffer to store data for last executed sequence
-        self.data = None
+        self.ao_data = None
+        self.ai_data = None
+        self.sample_rate = None
+        self.soft_start = None
+        self.readout_delay = None
 
 
     def run_sequence(
             self,
             data: np.ndarray,
             sample_rate: float,
-            soft_start: bool = True
+            soft_start: bool = True,
+            readout_delay: int = 0
     ):
+        # Record sequence settings
+        self.ao_data = data
+        self.sample_rate = sample_rate
+        self.soft_start = soft_start
+        self.readout_delay = readout_delay
+
         # Verify the desired voltage is allowed
         self._validate_values(data)
 
@@ -90,10 +99,10 @@ class AnalogOutputAnalogInput:
             ai_task.start()
             
             # Wait for the AI task to finish
-            ao_task.wait_until_done(timeout=n_samples*sample_rate + 3) # 3 second buffer
+            ao_task.wait_until_done(timeout=n_samples*sample_rate + 1) # 1 second buffer
             
             # Get the data by reading the first `n_samples`.
-            self.data = ai_task.read(number_of_samples_per_channel=n_samples)
+            self.ai_data = ai_task.read(number_of_samples_per_channel=n_samples+readout_delay)[readout_delay:]
 
             # Stop the AI task
             ai_task.stop()
