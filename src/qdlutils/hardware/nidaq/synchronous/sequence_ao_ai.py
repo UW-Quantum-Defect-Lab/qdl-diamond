@@ -1,6 +1,8 @@
 import logging
 import numpy as np
 import nidaqmx
+import nidaqmx.constants
+import nidaqmx.stream_readers
 
 from qdlutils.hardware.nidaq.synchronous.sequence import Sequence
 

@@ -32,11 +32,11 @@ def main():
         ao_max_voltage = 5.0,
     )
 
-    ''# Number of samples in the sequence
+    # Number of samples in the sequence
     n_samples = 256
 
     # Rate of samples per second
-    sample_rate = 256
+    sample_rate = 64
 
     # Generate the data
     data_x = np.arange(0,n_samples) / sample_rate
