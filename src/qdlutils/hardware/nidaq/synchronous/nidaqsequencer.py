@@ -35,6 +35,33 @@ class NidaqSequencer(Sequence):
     times --- e.g. one scan of a PLE experiment or one pump-probe cycle in ODMR. Both the readout 
     datastreams of the `NidaqSequencerInput` and the write values of the`NidaqSequencerOutput` for 
     the most recent sequence are saved in their respective instances.
+
+    Attributes
+    ----------
+    inputs : dict[str,NidaqSequencerInput]
+        Dictionary whose keys-value pairs correspond to the name and `NidaqSequencerInput` instance
+        corresponding to the different input sources to be included in the sequence.
+    outputs : dict[str,NidaqSequencerOutput]
+        Dictionary whose keys-value pairs correspond to the name and `NidaqSequenceroutput` instance
+        corresponding to the different output sources to be included in the sequence.
+    clock_device : str
+        Name of the DAQ device on which the clock should run.
+    clock_channel : str
+        Name of the DAQ channel on which the clock should run.
+    clock_rate : float
+        Clock rate for the last run sequence.
+    soft_start : bool
+        Status of `soft_start` setting in the last run sequence.
+    timeout : float
+        Timeout used in the last run sequence.
+
+    Methods
+    -------
+    run_sequence(*args) -> None
+        Runs a single sequence writing `data` to the output datastreams and collecing the specified
+        number of samples on the input datastreams.
+    get_data(*args) -> dict[str,np.ndarray]
+        Returns the data from the specified input/output sources.
     '''
 
     def __init__(
@@ -84,7 +111,7 @@ class NidaqSequencer(Sequence):
             clock_rate: float,
             soft_start: bool = True,
             timeout: float = 300.0
-    ):
+    ) -> None:
         '''
         Runs a single sequence writing `data` to the output datastreams and collecing the specified
         number of samples on the input datastreams.
@@ -176,6 +203,23 @@ class NidaqSequencer(Sequence):
     ) -> dict[str,np.ndarray]:
         '''
         Returns the data currently stored in the input/output sources.
+
+        Parameters
+        ----------
+        names: list[str]
+            List of names of input/output sources to get the data from. By default `None`; if a list 
+            is provided then the data of only those sources is returned.
+        inputs: bool = True,
+            If `True` and `names` is `None`, output will contain all input source data.
+        outputs: bool = True
+            If `True` and `names` is `None`, output will contain all output source data.
+
+        Returns
+        -------
+        data : dict[str, np.ndarray]
+            A dictionary whose keys are the names of the input/output sources with value 
+            corresponding to the data obtained in the last completed sequence. The key-value pairs 
+            included in the dictionary include only those specified by the arguments to this method.
         '''
         # Output dictionary to write results to
         output_dict = {}
@@ -195,11 +239,11 @@ class NidaqSequencer(Sequence):
             # Return the output dictionary
             return output_dict
         
-        # Return the inputs
+        # Get the input source data
         if inputs is True:
             for name in self.inputs:
                 output_dict[name] = self.inputs[name].data
-        # Return the outputs
+        # Get the output source data
         if outputs is True:
             for name in self.outputs:
                 output_dict[name] = self.outputs[name].data
