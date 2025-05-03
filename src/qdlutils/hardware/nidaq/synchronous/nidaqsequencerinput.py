@@ -11,15 +11,28 @@ class NidaqSequencerInput:
             name: str,
             device: str,
             channel: str,
-            n_samples: int,
-            sample_rate: float = 1000000,
-            readout_delay: int = 0,
             **kwargs
     ) -> None:
-        self.clock_device = None
+        self.name = name
+        self.device = device
+        self.channel = channel
+
         self.task = None
         self.data = None
+        self.clock_device = None
+        self.sample_rate = None
+        self.n_samples = None
+        self.readout_delay = None
     
+    def build(
+            self,
+            n_samples,
+            clock_device,
+            sample_rate,
+            readout_delay
+    ) -> None:
+        pass
+
     def readout(
             self,
             **kwargs
@@ -42,39 +55,34 @@ class NidaqSequencerAIVoltage(NidaqSequencerInput):
             name: str,
             device: str,
             channel: str,
-            n_samples: int,
-            sample_rate: float = 1000000,
-            readout_delay: int = 0,
     ) -> None:
         self.name = name
         self.device = device
         self.channel = channel
-        self.n_samples = n_samples
-        self.sample_rate = sample_rate
-        self.readout_delay = readout_delay
 
-        self.clock_device = None
         self.task = None
         self.data = None
+        self.clock_device = None
+        self.sample_rate = None
+        self.n_samples = None
+        self.readout_delay = None
 
     def build(
             self,
-            clock_device: str = 'Dev1',
-            sample_rate: float = None
+            n_samples: int,
+            clock_device: str,
+            sample_rate: float,
+            readout_delay: int = 0
     ):
         
-        # Update sample rate if needed
-        if sample_rate is not None:
-            self.sample_rate = sample_rate
-
-        # Save clock device
+        # Save parameters
         self.clock_device = clock_device
-
-        # Need to update readout delay here too
+        self.sample_rate = sample_rate
+        self.n_samples = n_samples
+        self.readout_delay = readout_delay
 
         # Create task
         self.task = nidaqmx.Task()
-
         # Create the AI voltage channel and configure the timing
         self.task.ai_channels.add_ai_voltage_chan(self.device + '/' + self.channel)
         self.task.timing.cfg_samp_clk_timing(
@@ -87,6 +95,8 @@ class NidaqSequencerAIVoltage(NidaqSequencerInput):
         self.task.triggers.start_trigger.cfg_dig_edge_start_trig(
             '/'+self.clock_device+'/di/StartTrigger'
         )
+        # Commit the task to the hardware
+        self.task.control(nidaqmx.constants.TaskMode.TASK_COMMIT)
 
     def readout(
             self
@@ -107,38 +117,35 @@ class NidaqSequencerCIEdge(NidaqSequencerInput):
             device: str,
             channel: str,
             terminal: str,
-            n_samples: int,
-            sample_rate: float = 1000000,
-            readout_delay: int = 0,
     ) -> None:
         self.name = name
         self.device = device
         self.channel = channel
         self.terminal = terminal
-        self.n_samples = n_samples
-        self.sample_rate = sample_rate
-        self.readout_delay = readout_delay
 
-        self.clock_device = None
         self.task = None
-        self.reader = None
+        self.data = None
+        self.clock_device = None
+        self.sample_rate = None
+        self.n_samples = None
+        self.readout_delay = None
 
     def build(
             self,
-            clock_device: str = 'Dev1',
-            sample_rate: float = None
+            n_samples: int,
+            clock_device: str,
+            sample_rate: float,
+            readout_delay: int = 0
     ):
         
-        # Update sample rate if needed
-        if sample_rate is not None:
-            self.sample_rate = sample_rate
-
-        # Update clock device
+        # Save parameters
         self.clock_device = clock_device
+        self.sample_rate = sample_rate
+        self.n_samples = n_samples
+        self.readout_delay = readout_delay
 
         # Create task
         self.task = nidaqmx.Task()
-
         # Create the counter input channel
         ci_channel = self.task.ci_channels.add_ci_count_edges_chan(
             self.device+'/'+self.channel,
@@ -162,6 +169,8 @@ class NidaqSequencerCIEdge(NidaqSequencerInput):
         self.task.triggers.arm_start_trigger.dig_edge_src = '/'+self.clock_device+'/di/SampleClock'
         # Set the counter buffer size
         self.task.in_stream.input_buf_size = self.n_samples+self.readout_delay
+        # Commit the task to the hardware
+        self.task.control(nidaqmx.constants.TaskMode.TASK_COMMIT)
 
         # Prepare the counter reader for the ci_task
         self.reader = nidaqmx.stream_readers.CounterReader(self.task.in_stream)
@@ -176,6 +185,10 @@ class NidaqSequencerCIEdge(NidaqSequencerInput):
             data_buffer,
             number_of_samples_per_channel=self.n_samples+self.readout_delay
         )
-        self.data = data_buffer[self.readout_delay:]
+        # Get the data after the delay, subtracking the counts at the end of the delay
+        if self.readout_delay > 0:
+            self.data = data_buffer[self.readout_delay:] - data_buffer[self.readout_delay-1]
+        else:
+            self.data = data_buffer
 
         return self.data

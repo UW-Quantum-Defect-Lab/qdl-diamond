@@ -3,6 +3,9 @@ import numpy as np
 import nidaqmx
 import nidaqmx.constants
 
+# Because we are on Python 3.9 type union operator `|` is not yet implemented
+from typing import Union
+
 '''
 This file contains the `NidaqSequencerOutput` base class and its child classes which represent
 individual signals or hardware components that should be outputted by the DAQ during a sequence as
@@ -38,7 +41,6 @@ class NidaqSequencerOutput:
             name: str,
             device: str,
             channel: str,
-            sample_rate: float = 1000000,
             **kwargs
     ) -> None:
         '''
@@ -50,26 +52,32 @@ class NidaqSequencerOutput:
             Name of the DAQ device to write data to
         channel: str
             Name of the DAQ channel to write data to
-        sample_rate: float
-            Default sample rate of the task. If using the clock task to manage the timing, this
-            argument should be larger than the clock rate.
         '''
-        self.clock_device = None
+        self.name = name
+        self.device = device
+        self.channel = channel
+
         self.task = None
         self.data = None
+        self.clock_device = None
+        self.sample_rate = None
+        self.n_samples = None
 
     def build(
             self,
+            data: np.ndarray,
             clock_device: str,
             sample_rate: float
     ) -> None:
         '''
         Instantiates the `nidaqmx.Task` corresponding to the output, sets the timing of the task
         (typically utilizing the clock signal), configures the start trigger to begin with the start
-        of the clock task.
+        of the clock task. Then writes the data.
 
         Parameters
         ----------
+        data : np.ndarray
+            Data array to write during the sequence.
         clock_device: str
             String indicating the device of the clock task generated in the `NidaqSequencer` method
             `NidaqSequencer.run_sequence()`.
@@ -79,23 +87,9 @@ class NidaqSequencerOutput:
         '''
         pass
 
-    def write(
-            self,
-            data: np.ndarray
-    ):
-        '''
-        Writes the data to the task. Generically should validate the data first.
-
-        Parameters
-        ----------
-        data: np.ndarray
-            Data vector to write during the sequence.
-        '''
-        pass
-
     def set(
             self,
-            setpoint: float | int | bool
+            setpoint: Union[float, int, bool]
     ) -> None:
         '''
         A utility method for setting the value of the output channel to the `setpoint` outside of 
@@ -119,7 +113,7 @@ class NidaqSequencerOutput:
 
     def _validate_data(
             self,
-            data: float | int | bool | np.ndarray
+            data: Union[float, int, bool, np.ndarray]
     ) -> None:
         '''
         Checks if the provided `data` is valid. Can be used to protect hardware from incorrect
@@ -141,46 +135,44 @@ class NidaqSequencerAOVoltage(NidaqSequencerOutput):
             name: str,
             device: str,
             channel: str,
-            n_samples: int,
-            sample_rate: float = 1000000,
             min_voltage: float = -5,
-            max_voltage: float = +5
+            max_voltage: float = 5
     ) -> None:
         
         self.name = name
         self.device = device
         self.channel = channel
-        self.n_samples = n_samples
-        self.sample_rate = sample_rate
         self.min_voltage = min_voltage
         self.max_voltage = max_voltage
 
-        self.clock_device = None
         self.task = None
         self.data = None
+        self.clock_device = None
+        self.sample_rate = None
+        self.n_samples = None
         
     def build(
             self,
-            clock_device: str = 'Dev1',
-            sample_rate: float = None
+            data: np.ndarray,
+            clock_device: str,
+            sample_rate: float,
     ):
-        
-        # Update sample rate if needed
-        if sample_rate is not None:
-            self.sample_rate = sample_rate
+        # Validate the data
+        self._validate_data(data)
 
-        # Save clock device
+        # Save parameters
+        self.data = data
         self.clock_device = clock_device
+        self.sample_rate = sample_rate
+        self.n_samples = len(data)
 
-        # Create task
+        # Create the task
         self.task = nidaqmx.Task()
-
-        # Create the AO voltage channel and configure the timing
+        # Create the AO voltage channel
         self.task.ao_channels.add_ao_voltage_chan(self.device+'/'+self.channel)
-
         # Configure the timing
         self.task.timing.cfg_samp_clk_timing(
-            self.sample_rate,
+            sample_rate,
             source='/'+self.clock_device+'/di/SampleClock',
             sample_mode=nidaqmx.constants.AcquisitionType.FINITE,
             samps_per_chan=self.n_samples
@@ -189,21 +181,11 @@ class NidaqSequencerAOVoltage(NidaqSequencerOutput):
         self.task.triggers.start_trigger.cfg_dig_edge_start_trig(
             '/'+self.clock_device+'/di/StartTrigger'
         )
-
-    def write(
-            self, 
-            data: np.ndarray,
-    ):
-        # Check if the data has the right shape
-        if len(data) != self.n_samples:
-            raise ValueError('Length of data does not match specified number of samples.')
-        # Validate that the data is in range
-        self._validate_data(data)
-        # Record the data vector
-        self.data = data
         # Write the data to the task
         self.task.write(data)
-
+        # Commit the task to the hardware
+        self.task.control(nidaqmx.constants.TaskMode.TASK_COMMIT)
+        
     def set(
             self,
             setpoint: float
@@ -215,16 +197,17 @@ class NidaqSequencerAOVoltage(NidaqSequencerOutput):
             task.ao_channels.add_ao_voltage_chan(self.device+'/'+self.channel)
             task.write(setpoint)
 
-    def _validate_values(
+    def _validate_data(
             self,
-            data: float | int | np.ndarray,
+            data: Union[float, int, np.ndarray],
     ):
         try:
             data = np.array(data)
         except:
-            raise TypeError(f'Data {data} is not a valid type.')
+            raise TypeError(f'Data type {type(data).__name__} is not a valid type.')
+        
         if np.any(data < self.min_voltage):
-            raise ValueError(f'Data {data} contains points less than {self.min_voltage:.3f}.')
+            raise ValueError(f'Data contains points less than allowed minimum {self.min_voltage:.3f}.')
         if np.any(data > self.max_voltage):
-            raise ValueError(f'Data {data} contains points greater than {self.max_voltage:.3f}.')
+            raise ValueError(f'Data contains points greater than allowed maximum {self.max_voltage:.3f}.')
 

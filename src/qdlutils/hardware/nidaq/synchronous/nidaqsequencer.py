@@ -107,8 +107,10 @@ class NidaqSequencer(Sequence):
 
     def run_sequence(
             self,
-            data: dict[str,np.ndarray],
             clock_rate: float,
+            output_data: dict[str,np.ndarray],
+            input_samples: dict[str,int],
+            readout_delays: dict[str,int] = {},
             soft_start: bool = True,
             timeout: float = 300.0
     ) -> None:
@@ -125,11 +127,15 @@ class NidaqSequencer(Sequence):
 
         Parameters
         ----------
-        data: dict[str,np.ndarray]
-            Dictionary of data vectors with keys corresponding to the particular output sources in
-            self.Outputs. The data vectors need not be of equal length.
         clock_rate: float
             Clock rate to use for the sequence.
+        output_data: dict[str,np.ndarray]
+            Dictionary of data vectors with keys corresponding to the particular output sources in
+            self.Outputs. The data vectors need not be of equal length.
+        input_samples: dict[str,int]
+            Dictionary of integers describing the number of samples to record for a given input
+            source defined by the corresponding key. The number of samples need not be the same for
+            all input sources.
         soft_start: bool = True
             If `True`, initializes each of the output sources to the first value in their
             corresponding data vector in the `data` dictionary before starting the sequence. This is
@@ -145,19 +151,21 @@ class NidaqSequencer(Sequence):
         self.timeout = timeout
 
         # First validate the data
-        for name in data:
-            self.outputs[name]._validate_data(data[name])
+        for name in output_data:
+            self.outputs[name]._validate_data(output_data[name])
 
         # Perform a soft start if requested
         if soft_start:
             # Iterate through the output sources and set to the initial data value
-            for name in data:
-                self.outputs[name].set(data[name][0])
+            for name in output_data:
+                self.outputs[name].set(output_data[name][0])
 
         # Create the clock task
         with nidaqmx.Task() as clock_task:
 
             # Initialize virtual DI clock task on an internal channel
+            # In principle one could instead create a DO channel and output the clock to one of the
+            # DO pins on the DAQ board. This would enable synching of other hardware.
             clock_task.di_channels.add_di_chan(self.clock_device+'/'+self.clock_channel)
             clock_task.timing.cfg_samp_clk_timing(
                 clock_rate,
@@ -168,12 +176,29 @@ class NidaqSequencer(Sequence):
 
             # Initialize and start the input tasks
             for name in self.inputs:
-                self.inputs[name].build(sample_rate = clock_rate, clock_device = self.clock_device)
+                # Get the readout delay if provided
+                try:
+                    readout_delay = readout_delays[name]
+                except:
+                    readout_delay = 0
+                # Build the task and configure the timings
+                self.inputs[name].build(
+                    n_samples = input_samples[name],
+                    clock_device = self.clock_device,
+                    sample_rate = clock_rate,
+                    readout_delay = readout_delay
+                )
+                # Start the task
+                # It will not actually begin until after the clock task starts
                 self.inputs[name].task.start()
             # Initialize and start the output tasks
             for name in self.outputs:
-                self.outputs[name].build(sample_rate = clock_rate, clock_device = self.clock_device)
-                self.outputs[name].write(data[name])
+                # Build the task and configure the timings
+                self.outputs[name].build(
+                    data = output_data[name],
+                    clock_device = self.clock_device,
+                    sample_rate = clock_rate
+                )
                 self.outputs[name].task.start()
 
             # Start the clock task and begin data I/O
