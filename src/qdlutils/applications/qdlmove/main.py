@@ -90,7 +90,7 @@ class PositionControllerApplication():
         # 4. ADD THOSE CONTROLLERS TO THIS LIST
         # This list is used to keep track of the controllers to ensure that the stepping
         # does not overlap.
-        self.movement_controllers = [#self.micros_application,
+        self.movement_controllers = [self.micros_application,
                                      self.piezos_application,]
         
         # 5. ADD LOGIC FOR NEW TYPES OF HARDWARE
