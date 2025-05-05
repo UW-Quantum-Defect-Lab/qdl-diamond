@@ -1,5 +1,7 @@
 import logging
 import numpy as np
+import matplotlib
+import matplotlib.pyplot as plt
 import nidaqmx
 import nidaqmx.constants
 
@@ -111,7 +113,7 @@ class NidaqSequencer(Sequence):
             output_data: dict[str,np.ndarray],
             input_samples: dict[str,int],
             readout_delays: dict[str,int] = {},
-            soft_start: bool = True,
+            soft_start: dict[str, bool] = {},
             timeout: float = 300.0
     ) -> None:
         '''
@@ -154,10 +156,11 @@ class NidaqSequencer(Sequence):
         for name in output_data:
             self.outputs[name]._validate_data(output_data[name])
 
-        # Perform a soft start if requested
-        if soft_start:
-            # Iterate through the output sources and set to the initial data value
-            for name in output_data:
+        # Check if any outputs should have a soft start and update if so
+        for name in soft_start:
+            # Perform a soft start if requested
+            if soft_start[name]:
+                # Set to value at the start of the sequence
                 self.outputs[name].set(output_data[name][0])
 
         # Create the clock task
@@ -224,7 +227,7 @@ class NidaqSequencer(Sequence):
             self,
             names: list[str] = None,
             inputs: bool = True,
-            outputs: bool = True
+            outputs: bool = True,
     ) -> dict[str,np.ndarray]:
         '''
         Returns the data currently stored in the input/output sources.
@@ -276,7 +279,74 @@ class NidaqSequencer(Sequence):
         # Return the output dictionary
         return output_dict
 
+    def check_sequence(
+            self,
+            clock_rate: float,
+            output_data: dict[str,np.ndarray],
+            input_samples: dict[str,int],
+            readout_delays: dict[str,int] = {},
+            input_sources_to_plot: list[str] = None,
+            output_sources_to_plot: list[str] = None,
+    ) -> matplotlib.figure.Figure:
+        '''
+        Returns a matplotlib figure illustrating the source datastreams.
+        '''
+        # If no specific sources are requested plot them all
+        if input_sources_to_plot is None:
+            input_sources_to_plot = list(self.inputs.keys())
+        if output_sources_to_plot is None:
+            output_sources_to_plot = list(self.outputs.keys())
 
+        # Create the figure
+        total_num_sources = len(input_sources_to_plot) + len(output_sources_to_plot)
+
+        fig, ax = plt.subplots(
+            nrows=total_num_sources,
+            ncols=1,
+            sharex=True,
+            gridspec_kw={'hspace':0, 'left':0.25, 'right':.95}
+        )
+        idx = 0
+        for name in output_sources_to_plot:
+            ax[idx].plot(
+                np.arange(len(output_data[name])), 
+                output_data[name],
+                'o-',
+                markersize=2
+            )
+            ax[idx].set_ylabel(name, rotation=0, ha='right', labelpad=10)
+            idx += 1
+        for name in input_sources_to_plot:
+            input_window = np.concat(
+                [np.zeros(readout_delays[name]), np.ones(input_samples[name])]
+            )
+            ax[idx].plot(
+                np.arange(len(input_window)), 
+                input_window,
+                'o-',
+                markersize=2
+            )
+            ax[idx].fill_between(
+                np.arange(len(input_window)), 
+                input_window,
+                color='C0',
+                alpha=0.5
+            )
+            ax[idx].set_ylabel(name, rotation=0, ha='right', labelpad=10)
+            idx += 1
+
+        # Label the x axis
+        ax[idx-1].set_xlabel('sample number')
+
+        # Set the second x axis
+        def time_to_sample(x):
+            return x * clock_rate
+        def sample_to_time(x):
+            return x / clock_rate
+        time_axis = ax[0].secondary_xaxis('top', functions=(sample_to_time, time_to_sample))
+        time_axis.set_xlabel('time (s)')
+
+        return fig
 
 
 
