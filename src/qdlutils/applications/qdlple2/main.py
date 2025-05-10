@@ -34,7 +34,7 @@ class LauncherApplication:
 
     def __init__(
             self, 
-            config_file: str, 
+            default_config_filename: str, 
             is_root_process: bool
     ) -> None:
         '''
@@ -73,7 +73,7 @@ class LauncherApplication:
         self.ouptut_source_names = None
 
         # Load the YAML file
-        self.configure_from_yaml(yaml_filename=config_file)
+        #self.configure_from_yaml(yaml_filename=default_config_filename)
 
         # Initialize the root tkinter widget (window housing GUI)
         if self.is_root_process:
@@ -242,14 +242,6 @@ class ScanApplication:
         #self.view.control_panel.norm_button.bind("<Button>", self.set_normalize)
         #self.view.control_panel.autonorm_button.bind("<Button>", self.auto_normalize)
 
-        '''# Setup the callback for rightclicks on the figure canvas
-        self.view.data_viewport.canvas.mpl_connect('button_press_event', 
-                                                   lambda event: self.open_rclick(event) if event.button == 3 else None)
-        # Set the commands for the right click
-        self.view.rclick_menu.add_command(label='Go to position', command=self.rclick_go_to) 
-        self.view.rclick_menu.add_separator() 
-        self.view.rclick_menu.add_command(label='Open counter', command=self.rclick_open_counter) '''
-
         # Launch the thread
         self.scan_thread = Thread(target=self.scan_thread_function)
         self.scan_thread.start()
@@ -276,14 +268,9 @@ class ScanApplication:
                     
                 # Update the figure
                 self.view.update_figure()
-                # Increase the current scan index
-                self.current_scan_index += 1
 
                 logger.debug('Row complete.')
 
-            self.home_position()
-            # Update the figure
-            self.view.update_figure()
             logger.info('Scan complete.')
 
         except Exception as e:
@@ -292,7 +279,7 @@ class ScanApplication:
     def stop_scan(
             self,
             tkinter_event: tk.Event = None
-    ) -> None:
+    ) -> None: 
         pass
 
     def save_scan(
@@ -302,3 +289,14 @@ class ScanApplication:
         pass
 
 
+
+
+
+def main(is_root_process=True):
+    tkapp = LauncherApplication(
+        default_config_filename=DEFAULT_CONFIG_FILE,
+        is_root_process=is_root_process)
+    tkapp.run()
+
+if __name__ == '__main__':
+    main()

@@ -1,10 +1,13 @@
 import logging
 import numpy as np
 
+from qdlutils.hardware.nidaq.synchronous.nidaqsequencer import NidaqSequencer
 from qdlutils.hardware.nidaq.synchronous.nidaqsequencerinput import NidaqSequencerInput
 from qdlutils.hardware.nidaq.synchronous.nidaqsequenceroutput import NidaqSequencerOutput
 
 from qdlutils.experiments.controllers.sequencecontrollerbase import SequenceControllerBase
+
+from typing import Union, Any, Callable
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -34,7 +37,7 @@ class PLEControllerBase(SequenceControllerBase):
 
 
 
-class PLEControllerPulsedRepump(SequenceControllerBase):
+class PLEControllerPulsedRepumpContinuous(PLEControllerBase):
 
     '''
     This class implements the PLE scan controller for PLE experiments with a single pulsed repump at
@@ -317,4 +320,323 @@ class PLEControllerPulsedRepump(SequenceControllerBase):
                 raise ValueError(f'Instruction {instructions[name]} invalid.')
             
         # Return the output dictionary
+        return output_dict
+    
+
+
+
+class PLEControllerPulsedRepumpSegmented(SequenceControllerBase):
+    '''
+    This version of the PLE controller splits the sequence into three separate segments, each of
+    which are set by a separate `NidaqSequencer`. The three segments, corresponding to repump, 
+    upscan, and downscan, are then run in sequence repeatedly to generate the data. This avoids the 
+    awkward conversion between the clock and sample rates, and subsequent back conversion after
+    reading out the data. The cost, however, is increased timing uncertainty between each segment.
+    Fortunately, the overhead between segements is only due to writing the new set of instructions
+    to the DAQ which is generally fast and would not impact the run time very much if at all.
+
+    Unfortunately, the use of multiple `NidaqSequencer` instances for each segment requires a
+    substantial modification to the underlying `SequenceControllerBase` class. Nevertheless, we
+    retain this inheritence to indicate that the same class structure should be retained.
+    '''
+
+    def __init__(
+            self,
+            inputs: dict[str,NidaqSequencerInput],
+            outputs: dict[str,NidaqSequencerOutput],
+            scan_laser_id: str,
+            repump_laser_id: str,
+            counter_id: str,
+            repump_laser_setpoints: dict = {'on': 1, 'off':0},
+            clock_device: str = 'Dev1',
+            clock_channel: str = 'port0',
+            process_instructions: dict = {}
+    ):
+        # Save the settings
+        self.inputs = inputs
+        self.outputs = outputs
+        self.clock_device = clock_device
+        self.clock_channel  = clock_channel
+
+        # Instantiate the sequencers for the repump, upscan, and downscan
+        self.repump_sequencer = NidaqSequencer(
+            inputs = inputs,
+            outputs = outputs,
+            clock_device = clock_device,
+            clock_channel = clock_channel
+        )
+        self.upscan_sequencer = NidaqSequencer(
+            inputs = inputs,
+            outputs = outputs,
+            clock_device = clock_device,
+            clock_channel = clock_channel
+        )
+        self.downscan_sequencer = NidaqSequencer(
+            inputs = inputs,
+            outputs = outputs,
+            clock_device = clock_device,
+            clock_channel = clock_channel
+        )
+
+        # Other attributes to be utilized later
+        self.sequence_settings = None
+        self.sample_rate_repump = None
+        self.sample_rate_upscan = None
+        self.sample_rate_downscan = None
+
+        self.output_data_repump = None
+        self.output_data_upscan = None
+        self.output_data_downscan = None
+        
+        self.input_samples_repump = None
+        self.input_samples_upscan = None
+        self.input_samples_downscan = None
+        self.readout_delays = None
+        self.soft_start = None
+        self.timeout_repump = None
+        self.timeout_upscan = None
+        self.timeout_downscan = None
+
+        # Control attributes
+        self.busy = False       # True if currently executing an action
+        self.stop = False       # Set to `True` externally if controller should stop
+
+        self.scan_laser_id = scan_laser_id
+        self.repump_laser_id = repump_laser_id
+        self.counter_id = counter_id
+        self.repump_laser_setpoints = repump_laser_setpoints
+        self.process_instructions = process_instructions
+
+    def configure_sequence(
+            self,
+            min,
+            max,
+            n_pixels_up,
+            n_pixels_down,
+            n_subpixels,
+            time_up,
+            time_down,
+            time_repump,
+    ):
+        # Save the scan parameters
+        self.min=min
+        self.max=max
+        self.n_pixels_up=n_pixels_up
+        self.n_pixels_down=n_pixels_down
+        self.n_subpixels=n_subpixels
+        self.n_subpixels_up=n_subpixels*n_pixels_up
+        self.n_subpixels_down=n_subpixels*n_pixels_down
+        self.time_up=time_up
+        self.time_down=time_down
+        self.time_repump=time_repump
+
+        self.sequence_settings = {
+            'min': self.min,
+            'max': self.max,
+            'n_pixels_up': self.n_pixels_up,
+            'n_pixels_down': self.n_pixels_down,
+            'n_subpixels': self.n_subpixels,
+            'n_subpixels_up': self.n_subpixels_up,
+            'n_subpixels_down': self.n_subpixels_down,
+            'time_up': self.time_up,
+            'time_down': self.time_down,
+            'time_repump': self.time_repump,
+        }
+
+        # Check if the max > min and both are within the scan laser's range
+        if max > min:
+            self.outputs[self.scan_laser_id]._validate_data(data=min)
+            self.outputs[self.scan_laser_id]._validate_data(data=min)
+        else:
+            raise ValueError(f'Requested max {max:.3f} is less than min {min:.3f}.')
+        # Check if pixel numbers are positive integers
+        if type(n_pixels_up) is not int or n_pixels_up < 1:
+            raise ValueError(f'Requested # pixels up {n_pixels_up} is invalid (must be at least 1).')
+        if type(n_pixels_down) is not int or n_pixels_down < 1:
+            raise ValueError(f'Requested # pixels down {n_pixels_down} is invalid (must be at least 1).')
+        if type(n_subpixels) is not int or n_subpixels < 1:
+            raise ValueError(f'Requested # subpixels {n_subpixels} is invalid (must be at least 1).')
+        # Check that up/downscan times are greater than zero.
+        if not (time_up > 0):
+            raise ValueError(f'Requested upsweep time {time_up}s is invalid (must be > 0).')
+        if not (time_down > 0):
+            raise ValueError(f'Requested downsweep time {time_down}s is invalid (must be > 0).')
+        # Check if repump time is nonzero
+        if time_repump < 0:
+            raise ValueError(f'Requested repump time {time_repump} is invalid (must be non-negative).')
+
+        # Compute the number of samples
+        self.n_samples_repump = int(time_repump * 1000)
+        self.n_samples_upscan = n_pixels_up * n_subpixels
+        self.n_samples_downscan = n_pixels_down * n_subpixels 
+        self.n_samples_scan = self.n_samples_upscan + self.n_samples_downscan
+        self.n_samples_total = self.n_samples_repump + self.n_samples_upscan + self.n_samples_downscan
+
+        # Compute the sample rates
+        self.sample_rate_repump = 1000
+        self.sample_rate_upscan = self.n_samples_upscan / time_up
+        self.sample_rate_downscan = self.n_samples_downscan / time_down
+
+        # Compute output datastream for the scanning laser
+        scan_samples_repump = np.ones(self.n_samples_repump) * min
+        scan_samples_upscan = np.linspace(start=min, stop=max, num=self.n_samples_upscan, endpoint=False)
+        scan_samples_downscans = np.linspace(start=max, stop=min, num=self.n_samples_downscan, endpoint=False)
+
+        # Compute output datstream for the repump laser
+        # Laser is on during the repump step and off otherwise
+        repump_samples_repump = np.ones(self.n_samples_repump) * self.repump_laser_setpoints['on']
+        repump_samples_upscan = np.ones(self.n_samples_upscan) * self.repump_laser_setpoints['off']
+        repump_samples_downscan = np.ones(self.n_samples_downscan) * self.repump_laser_setpoints['off']
+
+        # Save the output datastreams
+        self.output_data_repump = {
+            self.scan_laser_id: scan_samples_repump,
+            self.repump_laser_id: repump_samples_repump 
+        }
+        self.output_data_upscan = {
+            self.scan_laser_id: scan_samples_upscan,
+            self.repump_laser_id: repump_samples_upscan 
+        }
+        self.output_data_downscan = {
+            self.scan_laser_id: scan_samples_downscans,
+            self.repump_laser_id: repump_samples_downscan 
+        }
+        # Perform a soft start in general
+        self.soft_start = {
+            self.scan_laser_id: True,
+            self.repump_laser_id: True
+        }
+        # Inputs are all treated the same and so we assign the same values for `n_samples` and
+        # the corresponding readout delays
+        self.input_samples_repump = {
+            id: self.n_samples_repump for id in self.inputs
+        }
+        self.input_samples_upscan = {
+            id: self.n_samples_upscan for id in self.inputs
+        }
+        self.input_samples_downscan = {
+            id: self.n_samples_downscan for id in self.inputs
+        }
+        # No readout delays for now.
+        self.readout_delays = {
+            id: 0 for id in self.inputs
+        }
+        # Estimate the complete repump + scan cycle time and set the timeout (add 1 second buffer)
+        self.timeout_repump = time_repump + 1
+        self.timeout_upscan = time_up + 1
+        self.timeout_downscan = time_down + 1
+
+    def _run_sequence(
+            self, 
+            process_method: Callable = None,
+            process_kwargs: dict = {}
+    ) -> Union[dict[str,np.ndarray], Any]:
+        
+        # Run the repump sequence
+        if self.time_repump > 0:
+            print('starting repump')
+            self.repump_sequencer.run_sequence(
+                clock_rate=self.sample_rate_repump,
+                output_data=self.output_data_repump,
+                input_samples=self.input_samples_repump,
+                readout_delays=self.readout_delays,
+                soft_start=self.soft_start,
+                timeout=self.timeout_repump
+            )
+        # Run the repump sequence
+        if self.time_up > 0:
+            print('starting upscan')
+            self.upscan_sequencer.run_sequence(
+                clock_rate=self.sample_rate_upscan,
+                output_data=self.output_data_upscan,
+                input_samples=self.input_samples_upscan,
+                readout_delays=self.readout_delays,
+                soft_start=self.soft_start,
+                timeout=self.timeout_upscan
+            )
+        # Run the repump sequence
+        if self.time_down > 0:
+            print('starting downscan')
+            self.downscan_sequencer.run_sequence(
+                clock_rate=self.sample_rate_downscan,
+                output_data=self.output_data_downscan,
+                input_samples=self.input_samples_downscan,
+                readout_delays=self.readout_delays,
+                soft_start=self.soft_start,
+                timeout=self.timeout_downscan
+            )
+
+        # Get the data as a dictionary with names appended with repump/upscan/downscan
+        repump_data = {
+            'repump_'+id: val for id,val in self.repump_sequencer.get_data().items()
+        }
+        upscan_data = {
+            'upscan_subpixel_'+id: val for id,val in self.upscan_sequencer.get_data().items()
+        }
+        downscan_data = {
+            'downscan_subpixel_'+id: val for id,val in self.downscan_sequencer.get_data().items()
+        }
+        # Combine
+        data = {**repump_data, **upscan_data, **downscan_data}
+
+        # Return the data dictionary if no process method is provided
+        if process_method is None:
+            return data
+        else:
+            # Otherwise return the processed data
+            return process_method(data, **process_kwargs)
+        
+    def process_data(
+            self,
+            data: dict[str,np.ndarray],
+            instructions: dict[str,str]
+    ) -> dict[str, np.ndarray]:
+        '''
+        Process the data to return values in terms of the subpixels and pixels rather than clock
+        cycles.
+
+        Options:
+            (1) `'sum'`: report the sum of the samples
+            (2) `'average'`: average the samples in 
+            (3) `'first'`: report the first sample (default behavior)
+        '''
+
+        # Dictionary to save the data in
+        output_dict = {}
+
+        # Get the names of the inputs and outputs
+        source_names = [key for key in self.inputs] + [key for key in self.outputs]
+
+        # Iterate through the names of the sources
+        for name in source_names:
+
+            # Reshape the data
+            upscan_data_reshaped = data['upscan_subpixel_'+name].reshape(self.n_pixels_up, self.n_samples_upscan)
+            upscan_data_reshaped = data['downscan_subpixel_'+name].reshape(self.n_pixels_down, self.n_samples_downscan)
+
+            # Extract data as instructed
+            if (name not in instructions) or (instructions[name] == 'first'):
+                # Get the first data point of each subpixel
+                output_dict['upscan_'+name] = upscan_data_reshaped[:,0].squeeze()
+                output_dict['downscan_'+name] = upscan_data_reshaped[:,0].squeeze()
+            elif instructions[name] == 'sum':
+                # Get the sum of the data points at each subpixel
+                output_dict['upscan_'+name] = np.sum(upscan_data_reshaped, axis=1).squeeze()
+                output_dict['downscan_'+name] = np.sum(upscan_data_reshaped, axis=1).squeeze()
+            elif instructions[name] == 'average':
+                # Get the average of the data points at each subpixel
+                output_dict['upscan_'+name] = np.average(upscan_data_reshaped, axis=1).squeeze()
+                output_dict['downscan_'+name] = np.average(upscan_data_reshaped, axis=1).squeeze()
+            else:
+                ValueError(f'Instruction {instructions[name]} invalid.')
+
+            # Combined data
+            output_dict[name] = np.concatenate([ output_dict['upscan_'+name], output_dict['downscan_'+name] ])
+
+        # Convert the counter data to count rate
+        output_dict['upscan_'+self.counter_id] = np.diff(output_dict['upscan_'+self.counter_id], prepend=0 ) / self.time_up
+        output_dict['upscan_'+self.counter_id] = np.diff(output_dict['upscan_'+self.counter_id], prepend=0 ) / self.time_down
+        output_dict[self.counter_id] = np.concatenate([ output_dict['upscan_'+self.counter_id], output_dict['downscan_'+self.counter_id] ])
+
+        # Return the data
         return output_dict

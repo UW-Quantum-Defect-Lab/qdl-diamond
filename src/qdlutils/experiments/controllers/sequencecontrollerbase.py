@@ -5,7 +5,7 @@ from qdlutils.hardware.nidaq.synchronous.nidaqsequencer import NidaqSequencer
 from qdlutils.hardware.nidaq.synchronous.nidaqsequencerinput import NidaqSequencerInput
 from qdlutils.hardware.nidaq.synchronous.nidaqsequenceroutput import NidaqSequencerOutput
 
-from typing import Union, Any
+from typing import Union, Any, Callable
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -150,7 +150,7 @@ class SequenceControllerBase:
 
     def _run_sequence(
             self,
-            process_method: function = None,
+            process_method: Callable = None,
             process_kwargs: dict = {}
     ) -> Union[dict[str,np.ndarray], Any]:
         '''
@@ -163,7 +163,7 @@ class SequenceControllerBase:
 
         Attributes
         ----------
-        process_method: function = None
+        process_method: Callable = None
             A function which processes the data. The first argument must accept the source data in
             the form of `dict[str,np.ndarray]`. There are no restrictions on the return type of this
             method.
@@ -198,7 +198,7 @@ class SequenceControllerBase:
     def run_n_sequences(
             self,
             n: int,
-            process_method: function = None,
+            process_method: Callable = None,
             process_kwargs: dict = {}
     ):
         '''
@@ -209,7 +209,7 @@ class SequenceControllerBase:
         ----------
         n: int
             The number of sequence to perform consequtively.
-        process_method: function = None
+        process_method: Callable = None
             A function which processes the data. The first argument must accept the source data in
             the form of `dict[str,np.ndarray]`. There are no restrictions on the return type of this
             method. For convenience, the class method `process_data()` can be modified for this;
