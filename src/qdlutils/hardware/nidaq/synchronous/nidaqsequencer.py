@@ -5,107 +5,67 @@ import matplotlib.pyplot as plt
 import nidaqmx
 import nidaqmx.constants
 
-from qdlutils.hardware.nidaq.synchronous.sequence import Sequence
-from qdlutils.hardware.nidaq.synchronous.nidaqsequencerinput import NidaqSequencerInput
-from qdlutils.hardware.nidaq.synchronous.nidaqsequenceroutput import NidaqSequencerOutput
+# Because we are on Python 3.9 type union operator `|` is not yet implemented
+from typing import Union
 
+from qdlutils.hardware.nidaq.synchronous.sequence import Sequence
+from qdlutils.hardware.nidaq.synchronous.nidaqsequencerinputgroup import NidaqSequencerInputGroup
+from qdlutils.hardware.nidaq.synchronous.nidaqsequenceroutputgroup import NidaqSequencerOutputGroup
 
 class NidaqSequencer(Sequence):
 
-    '''
-    This class implements a generic, programmable synchronous I/O sequencer for NIDAQ controlled
-    instruments.
-
-    The general goal is to enable the user to program arbitrary coordinated streams of input and 
-    output tasks on the DAQ, synched by a shared virtual clock. This is a powerful tool for 
-    performing pulse sequences involving multiple pieces of hardware that need to be coordianted.
-    In effect, this is similar to implementing a pulse blaster using a NIDAQ PCIe board.
-
-    To utilize this, one creates two dictionaries of `NidaqSequencerInput` and 
-    `NidaqSequencerOutput` objects respectively which each encapsulate specific hardware or signals 
-    that one would like to coordinate via the DAQ. These dictionaries are passed to the sequencer
-    which can then freely create and execute the corresponding DAQ tasks. In theory, an arbitrary
-    number of inputs/outputs may be utilzed at the same time allowing for significant flexibility.
-    Of course, one must ensure that the desired tasks are compatible with hardware limiations of the
-    specific DAQ board being used.
-    
-    After intitalization, the user can then run a "sequence" via the `NidaqSequencer.run_sequence()`
-    method. A "sequence" in this context refers to a single batch of coordinated input/output 
-    datastreams. That is to say, the input tasks will readout the input datastream for however many
-    samples they are set to, and the output tasks will write all of the data they are provided to
-    write. In this sense, a sequence is a single shot of the experiment which may be repeated many
-    times --- e.g. one scan of a PLE experiment or one pump-probe cycle in ODMR. Both the readout 
-    datastreams of the `NidaqSequencerInput` and the write values of the`NidaqSequencerOutput` for 
-    the most recent sequence are saved in their respective instances.
-
-    Attributes
-    ----------
-    inputs : dict[str,NidaqSequencerInput]
-        Dictionary whose keys-value pairs correspond to the name and `NidaqSequencerInput` instance
-        corresponding to the different input sources to be included in the sequence.
-    outputs : dict[str,NidaqSequencerOutput]
-        Dictionary whose keys-value pairs correspond to the name and `NidaqSequenceroutput` instance
-        corresponding to the different output sources to be included in the sequence.
-    clock_device : str
-        Name of the DAQ device on which the clock should run.
-    clock_channel : str
-        Name of the DAQ channel on which the clock should run.
-    clock_rate : float
-        Clock rate for the last run sequence.
-    soft_start : bool
-        Status of `soft_start` setting in the last run sequence.
-    timeout : float
-        Timeout used in the last run sequence.
-
-    Methods
-    -------
-    run_sequence(*args) -> None
-        Runs a single sequence writing `data` to the output datastreams and collecing the specified
-        number of samples on the input datastreams.
-    get_data(*args) -> dict[str,np.ndarray]
-        Returns the data from the specified input/output sources.
-    '''
-
     def __init__(
             self,
-            inputs: dict[str,NidaqSequencerInput],
-            outputs: dict[str,NidaqSequencerOutput],
-            clock_device: str = 'Dev1',
-            clock_channel: str = 'port0'
-    ) -> None:
+            inputs: dict[str,NidaqSequencerInputGroup],
+            outputs: dict[str,NidaqSequencerOutputGroup],
+            clock_device: str,
+            clock_channel: str,
+            clock_terminal: str
+    ):
         '''
         Initializes the sequencer.
-
-        Parameters
-        ----------
-        inputs: dict[str,NidaqSequencerInput]
-            Dictionary of `NidaqSequencerInput` instances representing the different input sources
-            corresponding to the sequence. The keys of the dictionary should be "user-facing" names
-            for the different input sources, e.g. "ai_photodiode", "ci_spcm", etc. The corresponding
-            value in the dictionary should be an instance of a `NidaqSequencerInput` child class
-            which corresponds to the type of hardware it references. 
-        outputs: dict[str,NidaqSequencerOutput]
-            Dictionary of `NidaqSequencerOutput` instances representing the different output sources
-            corresponding to the sequence. The keys of the dictionary should be "user-facing" names
-            for the different output sources, e.g. "ao_laser", "di_trigger", etc. The corresponding
-            value in the dictionary should be an instance of a `NidaqSequencerOutput` child class
-            which corresponds to the type of hardware it references. 
-        clock_device: str
-            The name of the DAQ device to assigned the clock task used by the sequencer to 
-            coordinate the I/O datastreams.
-        clock_channel: str
-        The name of the DAQ channel to assigned the clock task used by the sequencer to 
-            coordinate the I/O datastreams.
         '''
-        # Save the I/O source dictionaries and the clock settings
         self.inputs = inputs
         self.outputs = outputs
         self.clock_device = clock_device
         self.clock_channel = clock_channel
-        # Allocate space for sequence metadata
+        self.clock_terminal = clock_terminal
+
+        # Additional parameters to be utilized later
         self.clock_rate = None
         self.soft_start = None
         self.timeout = None
+
+        # Get the source names for each input/output. This creates a dictionary with each key, value
+        # pair giving the name of the `NidaqSequencerInput/OuputGroup` instances supplied and their
+        # corresponding source names as a list.
+        self.input_source_names = {
+            name: input_group.source_names for name, input_group in inputs.items()
+        }
+        self.output_source_names = {
+            name: output_group.source_names for name, output_group in outputs.items()
+        }
+        # We also want to invert the structure to determine which task a given input is associated
+        # with. Thus we create a dictionary with inverted structure wherein each key is the name of
+        # a given source and the value is the name of the corresponding 
+        # `NidaqSequencerInput/OutputGroup`
+        self.input_source_group = {}
+        for group, sources in self.input_source_names.items():
+            for source in sources:
+                # Names for the sources should be unique to avoid ambiguity in data reading/writing.
+                # If a source with a given name already exists then throw an error
+                if source in self.input_source_group:
+                    raise ValueError(f'The input source name {source} is redundantly defined.')
+                self.input_source_group[source] = group
+        self.output_source_group = {}
+        for group, sources in self.output_source_names.items():
+            for source in sources:
+                # Names for the sources should be unique to avoid ambiguity in data reading/writing.
+                # If a source with a given name already exists then throw an error
+                if source in self.output_source_group:
+                    raise ValueError(f'The output source name {source} is redundantly defined.')
+                self.output_source_group[source] = group
+
 
     def run_sequence(
             self,
@@ -117,51 +77,49 @@ class NidaqSequencer(Sequence):
             timeout: float = 300.0
     ) -> None:
         '''
-        Runs a single sequence writing `data` to the output datastreams and collecing the specified
-        number of samples on the input datastreams.
-
-        The data is validated and the output hardware is prepared for the sequence. Then the clock
-        task and input/output tasks are configured. The sequence is launched when the clock task
-        starts triggering the start of the other tasks. Once all associated I/O tasks have been
-        completed, any input data is saved to the associated input instances and the tasks are 
-        stopped and closed. At this point, data can be extracted either by directly reading the 
-        individual input/output instances, or via the `NidaqSequencer.get_data()` method.
-
         Parameters
         ----------
         clock_rate: float
-            Clock rate to use for the sequence.
+            Clock rate to perform the sequence at. Samples and data are written on each cycle.
         output_data: dict[str,np.ndarray]
-            Dictionary of data vectors with keys corresponding to the particular output sources in
-            self.Outputs. The data vectors need not be of equal length.
+            A dictionary indicating the data to write during the sequence. The keys are the names of
+            individual output sources as defined in each `NidaqSequencerOutputGroup` instance. The values
+            are the associated `numpy` arrays of data to write. The data must be one-dimensional and
+            have consistent shape within any group of sources associated to the same 
+            `NidaqSequencerOutputGroup` instance. This is required as interpolation of the data to output
+            is ambiguous. 
         input_samples: dict[str,int]
-            Dictionary of integers describing the number of samples to record for a given input
-            source defined by the corresponding key. The number of samples need not be the same for
-            all input sources.
-        soft_start: bool = True
-            If `True`, initializes each of the output sources to the first value in their
-            corresponding data vector in the `data` dictionary before starting the sequence. This is
-            useful if the data vectors do not start and end at the same value.
+            A dictionary indicating the number of samples to read for any given input source. The
+            keys should be the names associated to specific input channels and the values should be
+            the number of samples.
+        readout_delays: dict[str,int] = {}
+            A dictionary indicating the number of samples to delay readout for any given input 
+            source. The keys should be the names associated to specific input channels and the 
+            values should be the number of samples. If a key is not provided the readout delay is 
+            assumed to be zero.
+        soft_start: dict[str, bool] = {}
+            A dictionary indicating if the given outputs should be set to their initial values
+            before executing the sequence. The keys should match individual output sources as 
+            defiend in their corresponding `NidaqSequencerOutpuGroup` instances. The values are boolean
+            indicating if the corresponding output should be set. If not included the default is to
+            not perform a soft start (i.e. `False`).
         timeout: float = 300.0
-            The maximum time in seconds that the sequencer will wait for the sequence to finish. If
-            you are running experiments involving long sequences then `timeout` should be set longer
-            than the expected execution time.
+            Timeout for the sequence to complete running. Should be set longer than the expected
+            time, e.g. `n_samples`/`clock_rate`.
         '''
-        # Save the metadata
-        self.clock_rate = clock_rate
-        self.soft_start = soft_start
-        self.timeout = timeout
-
-        # First validate the data
-        for name in output_data:
-            self.outputs[name]._validate_data(output_data[name])
+        # Verify the parameters are valid and get the readout delays if not provided.
+        readout_delays = self._parse_sequence_params(
+            output_data=output_data,
+            input_samples=input_samples,
+            readout_delays=readout_delays
+        )
 
         # Check if any outputs should have a soft start and update if so
         for name in soft_start:
             # Perform a soft start if requested
             if soft_start[name]:
-                # Set to value at the start of the sequence
-                self.outputs[name].set(output_data[name][0])
+                # Set to the value at the start of the data
+                self.set_output(output_name=name,setpoint=output_data[name][0])
 
         # Create the clock task
         with nidaqmx.Task() as clock_task:
@@ -179,17 +137,12 @@ class NidaqSequencer(Sequence):
 
             # Initialize and start the input tasks
             for name in self.inputs:
-                # Get the readout delay if provided
-                try:
-                    readout_delay = readout_delays[name]
-                except:
-                    readout_delay = 0
                 # Build the task and configure the timings
                 self.inputs[name].build(
-                    n_samples = input_samples[name],
+                    n_samples = input_samples,
                     clock_device = self.clock_device,
                     sample_rate = clock_rate,
-                    readout_delay = readout_delay
+                    readout_delays = readout_delays
                 )
                 # Start the task
                 # It will not actually begin until after the clock task starts
@@ -198,7 +151,7 @@ class NidaqSequencer(Sequence):
             for name in self.outputs:
                 # Build the task and configure the timings
                 self.outputs[name].build(
-                    data = output_data[name],
+                    data = output_data,
                     clock_device = self.clock_device,
                     sample_rate = clock_rate
                 )
@@ -228,7 +181,7 @@ class NidaqSequencer(Sequence):
             names: list[str] = None,
             inputs: bool = True,
             outputs: bool = True,
-    ) -> dict[str,np.ndarray]:
+    ) -> dict[str, np.ndarray]:
         '''
         Returns the data currently stored in the input/output sources.
 
@@ -250,7 +203,7 @@ class NidaqSequencer(Sequence):
             included in the dictionary include only those specified by the arguments to this method.
         '''
         # Output dictionary to write results to
-        output_dict = {}
+        data = {}
 
         # If specific names are provided, return their data only
         if names is not None:
@@ -258,26 +211,31 @@ class NidaqSequencer(Sequence):
             for name in names:
                 try:
                     # Look in the inputs dictionary
-                    output_dict[name] = self.inputs[name].data
+                    data_dict = self.inputs[self.input_source_group[name]].data
                 except KeyError:
                     # If not in the inputs dictionary look in the output dictionary
-                    output_dict[name] = self.outputs[name].data
+                    data_dict = self.outputs[self.output_source_group[name]].data
                 except:
                     raise KeyError(f'Provided source name {name} does not exist.')
+                # Store the retrieved data (update in place)
+                data |= data_dict
+
             # Return the output dictionary
-            return output_dict
+            return data
         
+        # If specific names are not provided get all inputs and/or outputs.
         # Get the input source data
         if inputs is True:
-            for name in self.inputs:
-                output_dict[name] = self.inputs[name].data
+            for group in self.input_source_names:
+                data |= self.inputs[group].data
+
         # Get the output source data
         if outputs is True:
-            for name in self.outputs:
-                output_dict[name] = self.outputs[name].data
+           for group in self.output_source_names:
+                data |= self.outputs[group].data
 
         # Return the output dictionary
-        return output_dict
+        return data
 
     def check_sequence(
             self,
@@ -291,11 +249,19 @@ class NidaqSequencer(Sequence):
         '''
         Returns a matplotlib figure illustrating the source datastreams.
         '''
+
+        # Verify the parameters are valid and get the readout delays if not provided.
+        readout_delays = self._parse_sequence_params(
+            output_data=output_data,
+            input_samples=input_samples,
+            readout_delays=readout_delays
+        )
+
         # If no specific sources are requested plot them all
         if input_sources_to_plot is None:
-            input_sources_to_plot = list(self.inputs.keys())
+            input_sources_to_plot = list(self.input_source_group)
         if output_sources_to_plot is None:
-            output_sources_to_plot = list(self.outputs.keys())
+            output_sources_to_plot = list(self.output_source_group)
 
         # Create the figure
         total_num_sources = len(input_sources_to_plot) + len(output_sources_to_plot)
@@ -348,7 +314,79 @@ class NidaqSequencer(Sequence):
 
         return fig
 
+    def set_output(
+            self,
+            output_name: str,
+            setpoint: Union[float, int, bool]
+    ):
+        '''
+        Sets the value of the requested output source to the specified setpoint.
+        '''
+        # Set the value
+        self.outputs[self.output_source_group[output_name]].set(output_name=output_name,setpoint=setpoint)
 
+    def _parse_sequence_params(
+            self,
+            output_data: dict[str,np.ndarray],
+            input_samples: dict[str,int],
+            readout_delays: dict[str,int]
+    ) -> dict[str,int]:
+        '''
+        Verifies that the sequence parameters are valid, returns modified input sample and readout.
 
+        Returns
+        -------
+        readout_delays: dict[str,int]
+            The `readout_delays` dictionary with new items for each input source not provided.
 
+        Notes
+        -----
+        The output source data within a group is required to be the same as the write datastream
+        within a given task must have the same shape for all channels in that task. This is because
+        Interpolation of the write data beyond what is explicitly provided is ambiguous (e.g. set to
+        "zero", hold the last written value, etc.). In fact, the behavior of the physical channel on
+        the DAQ itself is often ambiguous in such instances as well, and so all output data should
+        be of the same size. However, we do not enforce that here as one may want to have groups of
+        tasks with different sample rates, or have some well-defined method of interpolating data.
+        '''
+        # Verify that the output data for sources within each output group is valid
+        for group, source_names in self.output_source_names.items():
 
+            # Check if the data is defined and if it is valid for the output soruce
+            for src in source_names:
+                if src not in output_data:
+                    raise ValueError(f'Output data for source {src} was not defined.')
+                else:
+                    try:
+                        self.outputs[group]._validate_data(output_name=src,data=output_data[src])
+                    except (TypeError, ValueError) as e:
+                        raise ValueError(f'Output data for source {src} is invalid: {e}')
+
+            # Get the shapes of the data
+            shapes = [output_data[src].shape for src in source_names]
+            # Check if identical by converting to set
+            if len(set(shapes)) > 1:
+                raise ValueError(f'Length of data arrays for group {group}, {shapes}, do not match.')
+            # Make sure the shapes are one dimensional
+            if len(shapes[0]) > 1:
+                raise ValueError(f'Data arrays for group {group} have shape {shapes[0]}, but must be one-dimensional.')
+            
+
+        # Append readout delays of zero for any sources not explicitly defined.
+        for group, source_names in self.input_source_names.items():
+            for src in source_names:
+
+                # Check that the input samples are valid and completely defined
+                if src not in input_samples:
+                    raise ValueError(f'The number of input samples for source {src} is undefined.')
+                elif input_samples[src] < 0:
+                    raise ValueError(f'The number of input samples for source {src} is invalid.')
+
+                # Fix the readout delays
+                if src not in readout_delays:
+                    readout_delays[src] = 0
+                elif readout_delays[src] < 0:
+                    raise ValueError(f'Readout delay for source {src}, {readout_delays[src]}, cannot be negative.')
+
+        return readout_delays
+                
