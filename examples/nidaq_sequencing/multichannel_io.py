@@ -55,6 +55,9 @@ def main():
     # Sample rate
     sample_rate = 32
 
+    # Readout delay
+    readout_delay = 2
+
     # Data to write
     n_samples = 128
     x = np.linspace(0,1,n_samples)
@@ -106,14 +109,13 @@ def main():
             sample_rate,
             source='/'+clock_dev_ch[0]+'/di/SampleClock',
             sample_mode=nidaqmx.constants.AcquisitionType.FINITE,
-            samps_per_chan=n_samples
+            samps_per_chan=n_samples+readout_delay
         )
         # Set the start trigger to be the start trigger of the ai_task
         ai_task.triggers.start_trigger.cfg_dig_edge_start_trig('/'+clock_dev_ch[0]+'/di/StartTrigger')
 
         # Prepare the reader to read the data after the task aquisition
         reader = nidaqmx.stream_readers.AnalogMultiChannelReader(ai_task.in_stream)
-
         
         # Start the AO task, will wait until the start of the clock task to begin
         ao_task.start()
@@ -128,18 +130,17 @@ def main():
         print('Done.')
 
         # Get the output data
-        ai_data = np.zeros(shape=(2,n_samples))
+        ai_data = np.zeros(shape=(2,n_samples+readout_delay))
         reader.read_many_sample(data=ai_data,
-                                number_of_samples_per_channel=n_samples,
+                                number_of_samples_per_channel=n_samples+readout_delay,
                                 timeout=n_samples/sample_rate + 1)
-        
-        
+
         # Plot the results
         fig, ax = plt.subplots(2,1,sharex=True)
         ax[0].plot(x,ao_data_1)
-        ax[0].plot(x,ai_data[0], '--')
+        ax[0].plot(x,ai_data[0,readout_delay:], '--')
         ax[1].plot(x,ao_data_2)
-        ax[1].plot(x,ai_data[1], '--')
+        ax[1].plot(x,ai_data[1,readout_delay:], '--')
         plt.show()
         
 
