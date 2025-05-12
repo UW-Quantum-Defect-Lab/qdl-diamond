@@ -117,7 +117,7 @@ class NidaqSequencer(Sequence):
         # Check if any outputs should have a soft start and update if so
         for name in soft_start:
             # Perform a soft start if requested
-            if soft_start[name]:
+            if name in self.output_source_group and soft_start[name]:
                 # Set to the value at the start of the data
                 self.set_output(output_name=name,setpoint=output_data[name][0])
 
@@ -324,6 +324,16 @@ class NidaqSequencer(Sequence):
         '''
         # Set the value
         self.outputs[self.output_source_group[output_name]].set(output_name=output_name,setpoint=setpoint)
+
+    def validate_output_data(
+            self,
+            output_name: str,
+            data: Union[float, int, bool, np.ndarray]
+    ):
+        '''
+        Validates the provided data for output on the given output source
+        '''
+        self.outputs[self.output_source_group[output_name]]._validate_data(output_name=output_name,data=data)
 
     def _parse_sequence_params(
             self,

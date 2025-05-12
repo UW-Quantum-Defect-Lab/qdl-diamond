@@ -2,8 +2,8 @@ import logging
 import numpy as np
 
 from qdlutils.hardware.nidaq.synchronous.nidaqsequencer import NidaqSequencer
-from qdlutils.hardware.nidaq.synchronous.nidaqsequencerinput import NidaqSequencerInput
-from qdlutils.hardware.nidaq.synchronous.nidaqsequenceroutput import NidaqSequencerOutput
+from qdlutils.hardware.nidaq.synchronous.nidaqsequencerinputgroup import NidaqSequencerInputGroup
+from qdlutils.hardware.nidaq.synchronous.nidaqsequenceroutputgroup import NidaqSequencerOutputGroup
 
 from qdlutils.experiments.controllers.sequencecontrollerbase import SequenceControllerBase
 
@@ -16,8 +16,8 @@ class PLEControllerBase(SequenceControllerBase):
 
     def __init__(
             self,
-            inputs: dict[str,NidaqSequencerInput],
-            outputs: dict[str,NidaqSequencerOutput],
+            inputs: dict[str,NidaqSequencerInputGroup],
+            outputs: dict[str,NidaqSequencerOutputGroup],
             scan_laser_id: str,
             clock_device: str = 'Dev1',
             clock_channel: str = 'port0',
@@ -47,8 +47,8 @@ class PLEControllerPulsedRepumpContinuous(PLEControllerBase):
 
     def __init__(
             self,
-            inputs: dict[str,NidaqSequencerInput],
-            outputs: dict[str,NidaqSequencerOutput],
+            inputs: dict[str,NidaqSequencerInputGroup],
+            outputs: dict[str,NidaqSequencerOutputGroup],
             scan_laser_id: str,
             repump_laser_id: str,
             repump_laser_setpoints: dict = {'on': 1, 'off':0},
@@ -342,40 +342,55 @@ class PLEControllerPulsedRepumpSegmented(SequenceControllerBase):
 
     def __init__(
             self,
-            inputs: dict[str,NidaqSequencerInput],
-            outputs: dict[str,NidaqSequencerOutput],
+            scan_inputs: dict[str,NidaqSequencerInputGroup],
+            scan_outputs: dict[str,NidaqSequencerOutputGroup],
+            repump_inputs: dict[str,NidaqSequencerInputGroup],
+            repump_outputs: dict[str,NidaqSequencerOutputGroup],
             scan_laser_id: str,
             repump_laser_id: str,
             counter_id: str,
             repump_laser_setpoints: dict = {'on': 1, 'off':0},
-            clock_device: str = 'Dev1',
-            clock_channel: str = 'port0',
+            scan_clock_device: str = 'Dev1',
+            scan_clock_channel: str = 'port0',
+            scan_clock_terminal: str = 'PFI12',
+            repump_clock_device: str = 'Dev1',
+            repump_clock_channel: str = 'port0',
+            repump_clock_terminal: str = 'PFI12',
             process_instructions: dict = {}
     ):
         # Save the settings
-        self.inputs = inputs
-        self.outputs = outputs
-        self.clock_device = clock_device
-        self.clock_channel  = clock_channel
+        self.scan_inputs = scan_inputs
+        self.scan_outputs = scan_outputs
+        self.scan_clock_device = scan_clock_device
+        self.scan_clock_channel  = scan_clock_channel
+        self.scan_clock_terminal = scan_clock_terminal
+        self.repump_inputs = repump_inputs
+        self.repump_outputs = repump_outputs
+        self.repump_clock_device = repump_clock_device
+        self.repump_clock_channel  = repump_clock_channel
+        self.repump_clock_terminal = repump_clock_terminal
 
         # Instantiate the sequencers for the repump, upscan, and downscan
         self.repump_sequencer = NidaqSequencer(
-            inputs = inputs,
-            outputs = outputs,
-            clock_device = clock_device,
-            clock_channel = clock_channel
+            inputs = repump_inputs,
+            outputs = repump_outputs,
+            clock_device = repump_clock_device,
+            clock_channel = repump_clock_channel,
+            clock_terminal = repump_clock_terminal
         )
         self.upscan_sequencer = NidaqSequencer(
-            inputs = inputs,
-            outputs = outputs,
-            clock_device = clock_device,
-            clock_channel = clock_channel
+            inputs = scan_inputs,
+            outputs = scan_outputs,
+            clock_device = scan_clock_device,
+            clock_channel = scan_clock_channel,
+            clock_terminal = scan_clock_terminal
         )
         self.downscan_sequencer = NidaqSequencer(
-            inputs = inputs,
-            outputs = outputs,
-            clock_device = clock_device,
-            clock_channel = clock_channel
+            inputs = scan_inputs,
+            outputs = scan_outputs,
+            clock_device = scan_clock_device,
+            clock_channel = scan_clock_channel,
+            clock_terminal = scan_clock_terminal
         )
 
         # Other attributes to be utilized later
@@ -418,6 +433,11 @@ class PLEControllerPulsedRepumpSegmented(SequenceControllerBase):
             time_down,
             time_repump,
     ):
+        '''
+        In this current implementation, it is assumed that only the `repump_laser` is included as
+        an output for the repump. Likewise, it is assumed that only the `scan_laser` is included as
+        an output for the scan.
+        '''
         # Save the scan parameters
         self.min=min
         self.max=max
@@ -445,8 +465,8 @@ class PLEControllerPulsedRepumpSegmented(SequenceControllerBase):
 
         # Check if the max > min and both are within the scan laser's range
         if max > min:
-            self.outputs[self.scan_laser_id]._validate_data(data=min)
-            self.outputs[self.scan_laser_id]._validate_data(data=min)
+            self.upscan_sequencer.validate_output_data(output_name=self.scan_laser_id,data=min)
+            self.upscan_sequencer.validate_output_data(output_name=self.scan_laser_id,data=max)
         else:
             raise ValueError(f'Requested max {max:.3f} is less than min {min:.3f}.')
         # Check if pixel numbers are positive integers
@@ -466,7 +486,7 @@ class PLEControllerPulsedRepumpSegmented(SequenceControllerBase):
             raise ValueError(f'Requested repump time {time_repump} is invalid (must be non-negative).')
 
         # Compute the number of samples
-        self.n_samples_repump = int(time_repump * 1000)
+        self.n_samples_repump = int(time_repump * 1000) + 1 # additional sample to shut off the laser
         self.n_samples_upscan = n_pixels_up * n_subpixels
         self.n_samples_downscan = n_pixels_down * n_subpixels 
         self.n_samples_scan = self.n_samples_upscan + self.n_samples_downscan
@@ -478,28 +498,25 @@ class PLEControllerPulsedRepumpSegmented(SequenceControllerBase):
         self.sample_rate_downscan = self.n_samples_downscan / time_down
 
         # Compute output datastream for the scanning laser
-        scan_samples_repump = np.ones(self.n_samples_repump) * min
         scan_samples_upscan = np.linspace(start=min, stop=max, num=self.n_samples_upscan, endpoint=False)
         scan_samples_downscans = np.linspace(start=max, stop=min, num=self.n_samples_downscan, endpoint=False)
 
         # Compute output datstream for the repump laser
-        # Laser is on during the repump step and off otherwise
-        repump_samples_repump = np.ones(self.n_samples_repump) * self.repump_laser_setpoints['on']
-        repump_samples_upscan = np.ones(self.n_samples_upscan) * self.repump_laser_setpoints['off']
-        repump_samples_downscan = np.ones(self.n_samples_downscan) * self.repump_laser_setpoints['off']
+        # Laser is on during the repump step and shut off for the last step.
+        repump_samples_repump = np.array(
+            [self.repump_laser_setpoints['on'],]*(self.n_samples_repump-1) + [self.repump_laser_setpoints['off']],
+            dtype=np.float64
+        )
 
         # Save the output datastreams
         self.output_data_repump = {
-            self.scan_laser_id: scan_samples_repump,
-            self.repump_laser_id: repump_samples_repump 
+            self.repump_laser_id: repump_samples_repump,
         }
         self.output_data_upscan = {
             self.scan_laser_id: scan_samples_upscan,
-            self.repump_laser_id: repump_samples_upscan 
         }
         self.output_data_downscan = {
             self.scan_laser_id: scan_samples_downscans,
-            self.repump_laser_id: repump_samples_downscan 
         }
         # Perform a soft start in general
         self.soft_start = {
@@ -509,18 +526,16 @@ class PLEControllerPulsedRepumpSegmented(SequenceControllerBase):
         # Inputs are all treated the same and so we assign the same values for `n_samples` and
         # the corresponding readout delays
         self.input_samples_repump = {
-            id: self.n_samples_repump for id in self.inputs
+            id: self.n_samples_repump for id in self.repump_sequencer.input_source_group
         }
         self.input_samples_upscan = {
-            id: self.n_samples_upscan for id in self.inputs
+            id: self.n_samples_upscan for id in self.upscan_sequencer.input_source_group
         }
         self.input_samples_downscan = {
-            id: self.n_samples_downscan for id in self.inputs
+            id: self.n_samples_downscan for id in self.downscan_sequencer.input_source_group
         }
         # No readout delays for now.
-        self.readout_delays = {
-            id: 0 for id in self.inputs
-        }
+        self.readout_delays = {id: 0 for id in self.upscan_sequencer.input_source_group} | {id: 0 for id in self.repump_sequencer.input_source_group}
         # Estimate the complete repump + scan cycle time and set the timeout (add 1 second buffer)
         self.timeout_repump = time_repump + 1
         self.timeout_upscan = time_up + 1
@@ -533,46 +548,49 @@ class PLEControllerPulsedRepumpSegmented(SequenceControllerBase):
     ) -> Union[dict[str,np.ndarray], Any]:
         
         # Run the repump sequence
-        if self.time_repump > 0:
-            print('starting repump')
-            self.repump_sequencer.run_sequence(
-                clock_rate=self.sample_rate_repump,
-                output_data=self.output_data_repump,
-                input_samples=self.input_samples_repump,
-                readout_delays=self.readout_delays,
-                soft_start=self.soft_start,
-                timeout=self.timeout_repump
-            )
-        # Run the repump sequence
-        if self.time_up > 0:
-            print('starting upscan')
-            self.upscan_sequencer.run_sequence(
-                clock_rate=self.sample_rate_upscan,
-                output_data=self.output_data_upscan,
-                input_samples=self.input_samples_upscan,
-                readout_delays=self.readout_delays,
-                soft_start=self.soft_start,
-                timeout=self.timeout_upscan
-            )
-        # Run the repump sequence
-        if self.time_down > 0:
-            print('starting downscan')
-            self.downscan_sequencer.run_sequence(
-                clock_rate=self.sample_rate_downscan,
-                output_data=self.output_data_downscan,
-                input_samples=self.input_samples_downscan,
-                readout_delays=self.readout_delays,
-                soft_start=self.soft_start,
-                timeout=self.timeout_downscan
-            )
-
+        logger.info('Starting repump...')
+        self.repump_sequencer.run_sequence(
+            clock_rate=self.sample_rate_repump,
+            output_data=self.output_data_repump,
+            input_samples=self.input_samples_repump,
+            readout_delays=self.readout_delays,
+            soft_start=self.soft_start,
+            timeout=self.timeout_repump
+        )
+        logger.info('Finished repump.')
         # Get the data as a dictionary with names appended with repump/upscan/downscan
         repump_data = {
             'repump_'+id: val for id,val in self.repump_sequencer.get_data().items()
         }
+
+        # Run the repump sequence
+        logger.info('Starting upscan...')
+        self.upscan_sequencer.run_sequence(
+            clock_rate=self.sample_rate_upscan,
+            output_data=self.output_data_upscan,
+            input_samples=self.input_samples_upscan,
+            readout_delays=self.readout_delays,
+            soft_start=self.soft_start,
+            timeout=self.timeout_upscan
+        )
+        logger.info('Finished upscan.')
+        # Get the data
         upscan_data = {
             'upscan_subpixel_'+id: val for id,val in self.upscan_sequencer.get_data().items()
         }
+
+        # Run the repump sequence
+        logger.info('Starting downscan...')
+        self.downscan_sequencer.run_sequence(
+            clock_rate=self.sample_rate_downscan,
+            output_data=self.output_data_downscan,
+            input_samples=self.input_samples_downscan,
+            readout_delays=self.readout_delays,
+            soft_start=self.soft_start,
+            timeout=self.timeout_downscan
+        )
+        logger.info('Finished downscan.')
+        # Get the data
         downscan_data = {
             'downscan_subpixel_'+id: val for id,val in self.downscan_sequencer.get_data().items()
         }
@@ -605,28 +623,28 @@ class PLEControllerPulsedRepumpSegmented(SequenceControllerBase):
         output_dict = {}
 
         # Get the names of the inputs and outputs
-        source_names = [key for key in self.inputs] + [key for key in self.outputs]
+        source_names = [key for key in self.upscan_sequencer.input_source_group] + [key for key in self.upscan_sequencer.output_source_group]
 
-        # Iterate through the names of the sources
+        # Iterate through the names of the sources to process the subpixels
         for name in source_names:
 
             # Reshape the data
-            upscan_data_reshaped = data['upscan_subpixel_'+name].reshape(self.n_pixels_up, self.n_samples_upscan)
-            upscan_data_reshaped = data['downscan_subpixel_'+name].reshape(self.n_pixels_down, self.n_samples_downscan)
+            upscan_data_reshaped = data['upscan_subpixel_'+name].reshape(self.n_pixels_up, self.n_subpixels)
+            downscan_data_reshaped = data['downscan_subpixel_'+name].reshape(self.n_pixels_down, self.n_subpixels)
 
             # Extract data as instructed
             if (name not in instructions) or (instructions[name] == 'first'):
                 # Get the first data point of each subpixel
                 output_dict['upscan_'+name] = upscan_data_reshaped[:,0].squeeze()
-                output_dict['downscan_'+name] = upscan_data_reshaped[:,0].squeeze()
+                output_dict['downscan_'+name] = downscan_data_reshaped[:,0].squeeze()
             elif instructions[name] == 'sum':
                 # Get the sum of the data points at each subpixel
                 output_dict['upscan_'+name] = np.sum(upscan_data_reshaped, axis=1).squeeze()
-                output_dict['downscan_'+name] = np.sum(upscan_data_reshaped, axis=1).squeeze()
+                output_dict['downscan_'+name] = np.sum(downscan_data_reshaped, axis=1).squeeze()
             elif instructions[name] == 'average':
                 # Get the average of the data points at each subpixel
                 output_dict['upscan_'+name] = np.average(upscan_data_reshaped, axis=1).squeeze()
-                output_dict['downscan_'+name] = np.average(upscan_data_reshaped, axis=1).squeeze()
+                output_dict['downscan_'+name] = np.average(downscan_data_reshaped, axis=1).squeeze()
             else:
                 ValueError(f'Instruction {instructions[name]} invalid.')
 
@@ -634,9 +652,12 @@ class PLEControllerPulsedRepumpSegmented(SequenceControllerBase):
             output_dict[name] = np.concatenate([ output_dict['upscan_'+name], output_dict['downscan_'+name] ])
 
         # Convert the counter data to count rate
-        output_dict['upscan_'+self.counter_id] = np.diff(output_dict['upscan_'+self.counter_id], prepend=0 ) / self.time_up
-        output_dict['upscan_'+self.counter_id] = np.diff(output_dict['upscan_'+self.counter_id], prepend=0 ) / self.time_down
+        output_dict['upscan_'+self.counter_id] = np.diff(output_dict['upscan_'+self.counter_id], prepend=0 ) / (self.time_up / self.n_pixels_up)
+        output_dict['downscan_'+self.counter_id] = np.diff(output_dict['downscan_'+self.counter_id], prepend=0 ) / (self.time_down / self.n_pixels_down)
         output_dict[self.counter_id] = np.concatenate([ output_dict['upscan_'+self.counter_id], output_dict['downscan_'+self.counter_id] ])
+
+        # Add the raw unprocessed data
+        output_dict |= data
 
         # Return the data
         return output_dict

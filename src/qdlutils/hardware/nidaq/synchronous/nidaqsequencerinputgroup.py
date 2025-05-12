@@ -176,9 +176,9 @@ class NidaqSequencerAIVoltageGroup(NidaqSequencerInputGroup):
     ) -> None:
         # Get the output data
         data_buffer = np.zeros(shape=(self.n_channels,self.n_samples_in_task))
-        # Squeeze the data buffer if only one channel provided
-        if self.n_channels < 2:
-            data_buffer = data_buffer.squeeze()
+        # Squeeze the data buffer if only one channel provided (commented out here -- seems like a bug?)
+        #if self.n_channels < 2:
+        #    data_buffer = data_buffer.squeeze()
         self.reader.read_many_sample(
             data=data_buffer,
             number_of_samples_per_channel=self.n_samples_in_task,
@@ -299,7 +299,8 @@ class NidaqSequencerCIEdgeGroup(NidaqSequencerInputGroup):
     ) -> None:
         # Get the output data
         data_buffer = np.zeros(shape=(self.n_channels,self.n_samples_in_task),dtype=np.uint32)
-        # Squeeze data buffer if only one channel
+        # Squeeze data buffer if only one channel 
+        # (this seems like a bug with nidaqmx as the AI reader buffer seems to want a (1,n) instead of (n,)...)
         if self.n_channels < 2:
             data_buffer = data_buffer.squeeze()
         self.reader.read_many_sample_uint32(

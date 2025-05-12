@@ -2,8 +2,8 @@ import logging
 import numpy as np
 
 from qdlutils.hardware.nidaq.synchronous.nidaqsequencer import NidaqSequencer
-from qdlutils.hardware.nidaq.synchronous.nidaqsequencerinput import NidaqSequencerInput
-from qdlutils.hardware.nidaq.synchronous.nidaqsequenceroutput import NidaqSequencerOutput
+from qdlutils.hardware.nidaq.synchronous.nidaqsequencerinputgroup import NidaqSequencerInputGroup
+from qdlutils.hardware.nidaq.synchronous.nidaqsequenceroutputgroup import NidaqSequencerOutputGroup
 
 from typing import Union, Any, Callable
 
@@ -33,8 +33,8 @@ class SequenceControllerBase:
 
     def __init__(
             self,
-            inputs: dict[str,NidaqSequencerInput],
-            outputs: dict[str,NidaqSequencerOutput],
+            inputs: dict[str,NidaqSequencerInputGroup],
+            outputs: dict[str,NidaqSequencerOutputGroup],
             clock_device: str = 'Dev1',
             clock_channel: str = 'port0',
     ):
