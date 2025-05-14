@@ -124,15 +124,20 @@ class NidaqSequencer(Sequence):
         # Create the clock task
         with nidaqmx.Task() as clock_task:
 
-            # Initialize virtual DI clock task on an internal channel
-            # In principle one could instead create a DO channel and output the clock to one of the
-            # DO pins on the DAQ board. This would enable synching of other hardware.
-            clock_task.di_channels.add_di_chan(self.clock_device+'/'+self.clock_channel)
-            clock_task.timing.cfg_samp_clk_timing(
-                clock_rate,
-                sample_mode=nidaqmx.constants.AcquisitionType.CONTINUOUS
+            # Create counter output channel for the clock
+            # This channel generates a pulse train with a 0.5 duty cycle and clock rate as specified
+            clock_channel = clock_task.co_channels.add_co_pulse_chan_freq(
+                counter = self.clock_device + '/' + self.clock_channel,
+                freq = clock_rate,
+                duty_cycle = 0.5,
+                idle_state = nidaqmx.constants.Level.LOW,
+                initial_delay = 0,
             )
-            # Commit the clock task to hardware
+            # Wire the clock signal to the specified physical terminal
+            clock_channel.co_pulse_term = '/'+self.clock_device+'/'+self.clock_terminal
+            # Configure the timing; continous generation of pulses
+            clock_task.timing.cfg_implicit_timing(sample_mode=nidaqmx.constants.AcquisitionType.CONTINUOUS)
+            # Commit the task to hardware
             clock_task.control(nidaqmx.constants.TaskMode.TASK_COMMIT)
 
             # Initialize and start the input tasks
@@ -141,6 +146,7 @@ class NidaqSequencer(Sequence):
                 self.inputs[name].build(
                     n_samples = input_samples,
                     clock_device = self.clock_device,
+                    clock_terminal = self.clock_terminal,
                     sample_rate = clock_rate,
                     readout_delays = readout_delays
                 )
@@ -153,6 +159,7 @@ class NidaqSequencer(Sequence):
                 self.outputs[name].build(
                     data = output_data,
                     clock_device = self.clock_device,
+                    clock_terminal = self.clock_terminal,
                     sample_rate = clock_rate
                 )
                 self.outputs[name].task.start()

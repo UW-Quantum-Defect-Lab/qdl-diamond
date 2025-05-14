@@ -547,18 +547,20 @@ class PLEControllerPulsedRepumpSegmented(SequenceControllerBase):
             process_kwargs: dict = {}
     ) -> Union[dict[str,np.ndarray], Any]:
         
-        # Run the repump sequence
-        logger.info('Starting repump...')
-        self.repump_sequencer.run_sequence(
-            clock_rate=self.sample_rate_repump,
-            output_data=self.output_data_repump,
-            input_samples=self.input_samples_repump,
-            readout_delays=self.readout_delays,
-            soft_start=self.soft_start,
-            timeout=self.timeout_repump
-        )
-        logger.info('Finished repump.')
-        # Get the data as a dictionary with names appended with repump/upscan/downscan
+        # Run the repump sequence if time > 0.
+        if self.time_repump > 0:
+            logger.info('Starting repump...')
+            self.repump_sequencer.run_sequence(
+                clock_rate=self.sample_rate_repump,
+                output_data=self.output_data_repump,
+                input_samples=self.input_samples_repump,
+                readout_delays=self.readout_delays,
+                soft_start=self.soft_start,
+                timeout=self.timeout_repump
+            )
+            logger.info('Finished repump.')
+        # Get the data as a dictionary with names appended with repump/upscan/downscan, if repump
+        # time is zero, then all entries will be none.
         repump_data = {
             'repump_'+id: val for id,val in self.repump_sequencer.get_data().items()
         }
@@ -637,6 +639,10 @@ class PLEControllerPulsedRepumpSegmented(SequenceControllerBase):
                 # Get the first data point of each subpixel
                 output_dict['upscan_'+name] = upscan_data_reshaped[:,0].squeeze()
                 output_dict['downscan_'+name] = downscan_data_reshaped[:,0].squeeze()
+            elif instructions[name] == 'last':
+                # Get the last data point of each subpixel
+                output_dict['upscan_'+name] = upscan_data_reshaped[:,-1].squeeze()
+                output_dict['downscan_'+name] = downscan_data_reshaped[:,-1].squeeze()
             elif instructions[name] == 'sum':
                 # Get the sum of the data points at each subpixel
                 output_dict['upscan_'+name] = np.sum(upscan_data_reshaped, axis=1).squeeze()
@@ -650,11 +656,6 @@ class PLEControllerPulsedRepumpSegmented(SequenceControllerBase):
 
             # Combined data
             output_dict[name] = np.concatenate([ output_dict['upscan_'+name], output_dict['downscan_'+name] ])
-
-        # Convert the counter data to count rate
-        output_dict['upscan_'+self.counter_id] = np.diff(output_dict['upscan_'+self.counter_id], prepend=0 ) / (self.time_up / self.n_pixels_up)
-        output_dict['downscan_'+self.counter_id] = np.diff(output_dict['downscan_'+self.counter_id], prepend=0 ) / (self.time_down / self.n_pixels_down)
-        output_dict[self.counter_id] = np.concatenate([ output_dict['upscan_'+self.counter_id], output_dict['downscan_'+self.counter_id] ])
 
         # Add the raw unprocessed data
         output_dict |= data

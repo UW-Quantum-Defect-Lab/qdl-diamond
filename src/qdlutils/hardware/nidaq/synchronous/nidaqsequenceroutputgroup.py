@@ -82,6 +82,7 @@ class NidaqSequencerOutputGroup:
             self,
             data: dict[str, np.ndarray],
             clock_device: str,
+            clock_terminal: str,
             sample_rate: float
     ) -> None:
         '''
@@ -96,9 +97,11 @@ class NidaqSequencerOutputGroup:
         clock_device: str
             String indicating the device of the clock task generated in the `NidaqSequencer` method
             `NidaqSequencer.run_sequence()`.
+        clock_terminal: str
+            The terminal for the sequencer clock output to time the source task.
         sample_rate: float
-            Sample rate for the output task. This can be used to directly set the sample rate to a
-            value other than the clock's sample rate but need not in all cases.
+            The sample rate of the outputs. Since the timing source is given by the clock signal,
+            this parameter does not directly modify the actual sample rate.
         '''
         try:
             # Make the task, add the channels, configure timing, write data
@@ -193,6 +196,7 @@ class NidaqSequencerAOVoltageGroup(NidaqSequencerOutputGroup):
             self,
             data: dict[str, np.ndarray],
             clock_device: str,
+            clock_terminal: str,
             sample_rate: float
     ) -> None:
         '''
@@ -208,9 +212,11 @@ class NidaqSequencerAOVoltageGroup(NidaqSequencerOutputGroup):
         clock_device: str
             String indicating the device of the clock task generated in the `NidaqSequencer` method
             `NidaqSequencer.run_sequence()`.
+        clock_terminal: str
+            The terminal for the sequencer clock output to time the source task.
         sample_rate: float
-            Sample rate for the output task. This can be used to directly set the sample rate to a
-            value other than the clock's sample rate but need not in all cases.
+            The sample rate of the outputs. Since the timing source is given by the clock signal,
+            this parameter does not directly modify the actual sample rate.
         '''
         try:
             # Validate the data first before continuing. We iterate through the local attribute
@@ -222,6 +228,7 @@ class NidaqSequencerAOVoltageGroup(NidaqSequencerOutputGroup):
             # Save other parameters
             self.n_samples = np.max([len(data[name]) for name in self.device_channels_dict])
             self.clock_device = clock_device
+            self.clock_terminal = clock_terminal
             self.sample_rate = sample_rate
 
             # Create the task
@@ -234,12 +241,10 @@ class NidaqSequencerAOVoltageGroup(NidaqSequencerOutputGroup):
             # to dynamically program this in by simply passing the "clock task".
             self.task.timing.cfg_samp_clk_timing(
                 sample_rate,
-                source='/'+self.clock_device+'/di/SampleClock',
+                source='/'+clock_device+'/'+clock_terminal,
                 sample_mode=nidaqmx.constants.AcquisitionType.FINITE,
                 samps_per_chan=self.n_samples
             )
-            # Configure the trigger for the AO task
-            self.task.triggers.start_trigger.cfg_dig_edge_start_trig('/'+self.clock_device+'/di/StartTrigger')
             # Write the data to the task, must be an np.ndarray with shape `n_channels` by 
             # `n_samples` so we reshape it first. Iterating through the `device_channels_dict`
             # ensures that the data is supplied in the same order as the channels were added.
