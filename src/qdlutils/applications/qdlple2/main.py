@@ -107,7 +107,44 @@ class LauncherApplication:
         '''
         Opens the YAML file, extracts configuration data and loads the appropriate classes.
         '''
+
+        # Get the full path for the YAML file
         yaml_path = importlib.resources.files(CONFIG_PATH).joinpath(yaml_filename)
+        # Safe load the file into the `config` dict
+        with open(str(yaml_path), 'r') as file:
+            # Log selection
+            logger.info(f"Loading settings from: {yaml_path}")
+            # Get the YAML config as a nested dict
+            config = yaml.safe_load(file)
+
+        # Get top level
+        app_name = list(config.keys())[0]
+
+        # Get the config of the application controller
+        controller_config = config[app_name]['ApplicationController']
+        # Get the config of the hardware groups
+        hardware_config = config[app_name]['HardwareGroups']
+        # Get the config of the channels
+        channel_config = config[app_name]['Channels']
+
+        # First get the application controller class path/name and generate a constructor
+        ctrl_import_path = controller_config['import_path']
+        ctrl_class_name = controller_config['class_name']
+        module = importlib.import_module(ctrl_import_path)
+        logger.debug(f"Importing {ctrl_import_path}")
+        constructor = getattr(module, ctrl_class_name)
+
+        # Get the application controller parameters
+        ctrl_class_params = controller_config['configure']
+        # Determine the input/output groups for the repump and scan then create the instances and
+        # load into the corresponding dict.
+        for group in ctrl_class_params['scan_inputs']:
+            # Get the group dictionary
+            group_dict = hardware_config[group]
+            # Get the channels
+            # Load the channels
+
+
 
     def set_laser(
             self,

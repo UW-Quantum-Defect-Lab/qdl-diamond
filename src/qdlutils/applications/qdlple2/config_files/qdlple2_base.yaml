@@ -1,79 +1,88 @@
-QT3PLE:
+qdlple2:
   ApplicationController :
     import_path : qdlutils.applications.qdlple2.application_controller
     class_name : PleScanner
     configure :
-      inputs :
-        - Counter
-        - Photodiode
-      outputs : 
-        - ScanLaserVoltage
-        - RepumpLaserVoltage
-      clock_device : Dev1
-      clock_channel : port0
-      scan_laser_id : ScanLaserVoltage
-      repump_laser_id : RepumpLaserVoltage
+      scan_inputs:
+        - scan_ci_rate    # These point to the hardware groups defined below
+        - scan_ai_voltage
+      scan_outputs: 
+        - scan_ao_voltage
+      scan_clock_device: Dev1
+      scan_clock_channel: ctr0
+      scan_clock_terminal: PFI12
+      repump_outputs:
+        - repump_ao_voltage
+      repump_inputs: [] # Create a list if inputs are utilized for repump
+      repump_clock_device: Dev2
+      repump_clock_channel: ctr0
+      repump_clock_terminal: PFI12
+      scan_laser_id : scan_laser      # The name of the scan laser as defined below
+      repump_laser_id : repump_laser  # The name of the repump laser as defined below
+      counter_id : counter            # The name of the counter as defined below
+      repump_laser_setpoints:
+        off: 0  # Reconfigure these as needed for your repump type
+        on:  1
     
+  HardwareGroups:
 
-  Counter:
-    import_path : qdlutils.hardware.nidaq.counters.nidaqtimedratecounter
-    class_name  : NidaqTimedRateCounter
-    configure :
-      daq_name : Dev1  # NI DAQ Device Name
-      signal_terminal : PFI0  # NI DAQ terminal connected to input digital TTL signal
-      clock_terminal :    # Specifies the digital input terminal to the NI DAQ to use for a clock. If left blank, interprets as None or NULL
-      clock_rate: 100000  # NI DAQ clock rate in Hz
-      sample_time_in_seconds : 1
-      read_write_timeout : 10  # timeout in seconds for read/write operations
-      signal_counter : ctr2  # NI DAQ counter to use for counting the input signal, e.g. ctr0, ctr1, ctr2, or ctr3
+    # These are the hardware groups which are groups of channels with the same output type. The
+    # application controller refers to these blocks to indicate what the input/output sources are.
+    # In the channels entry, list the names of blocks in the ChannelConfig section to refer to 
+    # specific hardware/channel configurations.
 
-  Photodiode:
-    import_path : qdlutils.hardware.nidaq.counters.nidaqtimedratecounter
-    class_name  : NidaqTimedRateCounter
-    configure :
-      daq_name : Dev1  # NI DAQ Device Name
-      signal_terminal : PFI0  # NI DAQ terminal connected to input digital TTL signal
-      clock_terminal :    # Specifies the digital input terminal to the NI DAQ to use for a clock. If left blank, interprets as None or NULL
-      clock_rate: 100000  # NI DAQ clock rate in Hz
-      sample_time_in_seconds : 1
-      read_write_timeout : 10  # timeout in seconds for read/write operations
-      signal_counter : ctr2  # NI DAQ counter to use for counting the input signal, e.g. ctr0, ctr1, ctr2, or ctr3
+    scan_ao_voltage:
+      import_path: qdlutils.hardware.nidaq.synchronous.nidaqsequenceroutputgroup
+      class_name : NidaqSequencerAOVoltageGroup
+      channels:
+        - scan_laser
+      
+    scan_ci_rate:
+      import_path: qdlutils.hardware.nidaq.synchronous.nidaqsequencerinputgroup
+      class_name : NidaqSequencerCiEdgeRateGroup
+      channels:
+        - counter
 
+    scan_ai_voltage:
+      import_path: qdlutils.hardware.nidaq.synchronous.nidaqsequencerinputgroup
+      class_name : NidaqSequencerAIVoltageGroup
+      channels:
+        - photodiode
 
+    repump_ao_voltage:
+      import_path: qdlutils.hardware.nidaq.synchronous.nidaqsequenceroutputgroup
+      class_name : NidaqSequencerAOVoltageGroup
+      channels:
+        - scan_laser
+        
+  Channels:
 
-  VoltageController:
-    import_path : qdlutils.hardware.nidaq.analogoutputs.nidaqvoltage
-    class_name  : NidaqVoltageController
-    configure :
-      daq_name : Dev1  # NI DAQ Device Name
-      write_channels : ao3  # NI DAQ analog output channels to use for writing position
-      read_channels : ai3  # NI DAQ analog input channels to use for reading position
-      min_voltage: -3  # conversion factor from volts to microns, can also supply a list [8,8,8] or [6,4.2,5]
-      max_voltage: 5  # the voltage value that defines the position 0,0,0, can also supply a list [0,0,0] or [5,5,5]
-      scale_nm_per_volt: 1  # microns
+    # Define the different hardware channels on the daq here. When loading a specific hardware group
+    # the channels refer to blocks here which are utilized to initialize the channel. Each type of
+    # hardware group expects certain properties so take care to include everything that is required.
 
-  RepumpController:
-    import_path   : qdlutils.hardware.nidaq.analogoutputs.nidaqvoltage
-    class_name    : NidaqVoltageController
-    configure :
-      daq_name : Dev2  # NI DAQ Device Name
-      write_channels : ao0  # NI DAQ analog output channels to use for writing position
-      read_channels :   # NI DAQ analog input channels to use for reading position
-      min_voltage: 0  # conversion factor from volts to microns, can also supply a list [8,8,8] or [6,4.2,5]
-      max_voltage: 1  # the voltage value that defines the position 0,0,0, can also supply a list [0,0,0] or [5,5,5]
+    scan_laser:
+      device: Dev1
+      channel: ao0
+      min: -3
+      max: 5
+      process_instructions: #If blank default behavior of the controller will be assumed
 
+    repump_laser:
+      device: Dev2
+      channel: ao0
+      min: -5
+      max: 5
+      process_instructions:
 
-# notes
+    counter:
+      device: Dev1
+      channel: ctr2
+      terminal: PFI0
+      process_instructions: average # Average the count rate over a single pixel
 
-# clock_rate:
-#   Specifies the clock rate in Hz. If using an external clock,
-#   you should specifiy the clock rate here so that the correct counts per
-#   second are displayed. If using the internal NI DAQ clock (default behavior),
-#   this value specifies the clock rate to use. Per the NI DAQ manual,
-#   use a suitable clock rate for the device for best performance, which is an integer
-#   multiple downsample of the digital sample clock.
+    photodiode:
+      device: Dev1
+      channel: ai1
+      process_instructions:
 
-# clock_terminal:
-#   Specifies the digital input terminal to the NI DAQ to use for a clock.
-#   If None, the internal NI DAQ clock is used. Otherwise, a string value
-#   specifies the terminal to use for the clock.
