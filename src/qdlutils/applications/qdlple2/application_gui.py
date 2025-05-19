@@ -143,7 +143,7 @@ class ScanApplicationView:
 
     def __init__(self, 
                  window: tk.Toplevel, 
-                 application,   # LineScanApplication
+                 application, # ScanApplication
                  settings_dict: dict):
         
         self.application = application
@@ -240,10 +240,6 @@ class ImageFigureControlPanel:
         self.pause_button.grid(row=row, column=0, columnspan=2, pady=[5,1])
         # Continue button
         row += 1
-        self.continue_button = tk.Button(command_frame, text='Continue scan', width=15)
-        self.continue_button.grid(row=row, column=0, columnspan=2, pady=[5,1])
-        # Continue button
-        row += 1
         self.save_button = tk.Button(command_frame, text='Save scan', width=15)
         self.save_button.grid(row=row, column=0, columnspan=2, pady=[5,1])
 
@@ -251,34 +247,67 @@ class ImageFigureControlPanel:
         # Add more buttons or controls here
         # ===============================================================================
 
-        # Scan settings view
+        # Define settings frame to set all scan settings
         settings_frame = tk.Frame(frame)
-        settings_frame.pack(side=tk.TOP, padx=0, pady=0)
-        # Single axis scan section
-        row = 0
-        tk.Label(settings_frame, 
-                 text='Scan settings', 
-                 font='Helvetica 14').grid(row=row, column=0, pady=[10,5], columnspan=2)
+        settings_frame.pack(side=tk.TOP, padx=0, pady=[10,0])
+        # Min voltage
         row += 1
-        tk.Label(settings_frame, text='Range (μm)').grid(row=row, column=0, padx=5, pady=2)
-        self.image_range_entry = tk.Entry(settings_frame, width=10)
-        self.image_range_entry.insert(0, settings_dict['image_range'])
-        self.image_range_entry.grid(row=row, column=1, padx=5, pady=2)
-        self.image_range_entry.config(state='readonly')
-        # Number of pixels
+        tk.Label(settings_frame, text="Min voltage (V)").grid(row=row, column=0)
+        self.voltage_start_entry = tk.Entry(settings_frame, width=10)
+        self.voltage_start_entry.insert(0, settings_dict['min'])
+        self.voltage_start_entry.grid(row=row, column=1)
+        # Max voltage
         row += 1
-        tk.Label(settings_frame, text='Number of pixels').grid(row=row, column=0, padx=5, pady=2)
-        self.image_pixels_entry = tk.Entry(settings_frame, width=10)
-        self.image_pixels_entry.insert(0, settings_dict['image_pixels'])
-        self.image_pixels_entry.grid(row=row, column=1, padx=5, pady=2)
-        self.image_pixels_entry.config(state='readonly')
-        # Scan speed
+        tk.Label(settings_frame, text="Max voltage (V)").grid(row=row, column=0)
+        self.voltage_end_entry = tk.Entry(settings_frame, width=10)
+        self.voltage_end_entry.insert(0, settings_dict['max'])
+        self.voltage_end_entry.grid(row=row, column=1)
+        # Number of pixels on upsweep
         row += 1
-        tk.Label(settings_frame, text='Time per row (s)').grid(row=row, column=0, padx=5, pady=2)
-        self.image_time_entry = tk.Entry(settings_frame, width=10)
-        self.image_time_entry.insert(0, settings_dict['image_time'])
-        self.image_time_entry.grid(row=row, column=1, padx=5, pady=2)
-        self.image_time_entry.config(state='readonly')
+        tk.Label(settings_frame, text="# of pixels up").grid(row=row, column=0)
+        self.num_pixels_up_entry = tk.Entry(settings_frame, width=10)
+        self.num_pixels_up_entry.insert(0, settings_dict['n_pixels_up'])
+        self.num_pixels_up_entry.grid(row=row, column=1)
+        # Number of pixels on downsweep
+        row += 1
+        tk.Label(settings_frame, text="# of pixels down").grid(row=row, column=0)
+        self.num_pixels_down_entry = tk.Entry(settings_frame, width=10)
+        self.num_pixels_down_entry.insert(0, settings_dict['n_pixels_down'])
+        self.num_pixels_down_entry.grid(row=row, column=1)
+        # Number of scans
+        row += 1
+        tk.Label(settings_frame, text="# of scans").grid(row=row, column=0)
+        self.scan_num_entry = tk.Entry(settings_frame, width=10)
+        self.scan_num_entry.insert(0, settings_dict['n_scans'])
+        self.scan_num_entry.grid(row=row, column=1, padx=10)
+        # Time for the upsweep min -> max
+        row += 1
+        tk.Label(settings_frame, text="Upsweep time (s)").grid(row=row, column=0)
+        self.upsweep_time_entry = tk.Entry(settings_frame, width=10)
+        self.upsweep_time_entry.insert(0, settings_dict['time_up'])
+        self.upsweep_time_entry.grid(row=row, column=1)
+        # Time for the downsweep max -> min
+        row += 1
+        tk.Label(settings_frame, text="Downsweep time (s)").grid(row=row, column=0)
+        self.downsweep_time_entry = tk.Entry(settings_frame, width=10)
+        self.downsweep_time_entry.insert(0, settings_dict['time_down'])
+        self.downsweep_time_entry.grid(row=row, column=1, padx=10)
+        # Subpixel number
+        row += 1
+        tk.Label(settings_frame, text="# of sub-pixels").grid(row=row, column=0)
+        self.subpixel_entry = tk.Entry(settings_frame, width=10)
+        self.subpixel_entry.insert(0, settings_dict['n_subpixels'])
+        self.subpixel_entry.grid(row=row, column=1)
+        # Repump time
+        row += 1
+        tk.Label(settings_frame, text="Reump time (ms)").grid(row=row, column=0)
+        self.repump_entry = tk.Entry(settings_frame, width=10)
+        self.repump_entry.insert(0, settings_dict['time_repump'])
+        self.repump_entry.grid(row=row, column=1)
+
+        # ===============================================================================
+        # Add additional scan settings if implemented later
+        # ===============================================================================
 
         # Scan settings view
         image_settings_frame = tk.Frame(frame)

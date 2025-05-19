@@ -66,14 +66,6 @@ class LauncherApplication:
         # Store the GUI input values
         self.gui_input = None
 
-        # Data to load from YAML
-        # Instructions for processing data
-        self.processing_instructions = {}
-        # Input source names
-        self.input_source_names = None
-        # Output source names
-        self.ouptut_source_names = None
-
         # Load the YAML file
         self.configure_from_yaml(yaml_filename=default_config_filename)
 
@@ -426,13 +418,85 @@ class ScanApplication:
             self,
             tkinter_event: tk.Event = None
     ) -> None: 
-        pass
+        if self.application_controller.stop is True:
+            logger.info('Already waiting to pause.')
+            return None
+
+        if self.application_controller.busy:
+            logger.info('Pausing the scan...')
+            # Query the controller to stop
+            self.application_controller.stop = True
+        else:
+            logger.info('Scan is not currently running.')
 
     def save_scan(
             self,
             tkinter_event: tk.Event = None
     ) -> None:
-        pass
+        '''
+        Method to save the data, you can add more logic later for other filetypes.
+        The event input is to catch the tkinter event that is supplied but not used.
+        '''
+        allowed_formats = [('Image with dataset', '*.png'), ('Dataset', '*.hdf5')]
+
+        # Default filename
+        default_name = f'scan{self.id}_{self.timestamp.strftime("%Y%m%d")}'
+            
+        # Get the savefile name
+        afile = tk.filedialog.asksaveasfilename(filetypes=allowed_formats, 
+                                                initialfile=default_name+'.png',
+                                                initialdir = self.parent_application.last_save_directory)
+        # Handle if file was not chosen
+        if afile is None or afile == '':
+            logger.warning('File not saved!')
+            return # selection was canceled.
+
+        # Get the path
+        file_path = '/'.join(afile.split('/')[:-1])  + '/'
+        self.parent_application.last_save_directory = file_path # Save the last used file path
+        logger.info(f'Saving files to directory: {file_path}')
+        # Get the name with extension (will be overwritten)
+        file_name = afile.split('/')[-1]
+        # Get the filetype
+        file_type = file_name.split('.')[-1]
+        # Get the filename without extension
+        file_name = '.'.join(file_name.split('.')[:-1]) # Gets everything but the extension
+
+        # If the file type is .png, want to save image and hdf5
+        if file_type == 'png':
+            logger.info(f'Saving the PNG as {file_name}.png')
+            fig = self.view.data_viewport.fig
+            fig.savefig(file_path+file_name+'.png', dpi=300, bbox_inches=None, pad_inches=0)
+
+        # Save as hdf5
+        with h5py.File(file_path+file_name+'.hdf5', 'w') as df:
+            
+            logger.info(f'Saving the HDF5 as {file_name}.hdf5')
+            
+            # Save the file metadata
+            ds = df.create_dataset('file_metadata', 
+                                   data=np.array(['application', 
+                                                  'qdlutils_version', 
+                                                  'scan_id', 
+                                                  'timestamp', 
+                                                  'original_name'], dtype='S'))
+            ds.attrs['application'] = 'qdlutils.qdlscan.ImageScanApplication'
+            ds.attrs['qdlutils_version'] = qdlutils.__version__
+            ds.attrs['scan_id'] = self.id
+            ds.attrs['timestamp'] = self.timestamp.strftime("%Y-%m-%d %H:%M:%S")
+            ds.attrs['original_name'] = file_name
+
+            # Save the scan settings
+            # Run through the scan parameters dictionary saving data 
+            ds = df.create_dataset('scan_parameters')
+            for param, val in self.scan_parameters.items():
+                ds.attrs[param] =  val
+            ds.attrs['n_scans'] = self.n_scans
+
+            # Save the data
+            for source, data in self.data:
+                df.create_dataset(name=source, data=data)
+
 
 
 

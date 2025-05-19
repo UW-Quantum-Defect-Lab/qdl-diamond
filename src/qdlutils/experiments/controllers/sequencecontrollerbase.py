@@ -261,6 +261,7 @@ class SequenceControllerBase:
 
         # Release controller
         self.busy=False
+        self.stop=False
         logger.info('Completed sequence.')
 
 
