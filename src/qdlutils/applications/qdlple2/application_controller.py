@@ -526,16 +526,16 @@ class PLEControllerPulsedRepumpSegmented(SequenceControllerBase):
         # Inputs are all treated the same and so we assign the same values for `n_samples` and
         # the corresponding readout delays
         self.input_samples_repump = {
-            id: self.n_samples_repump for id in self.repump_sequencer.input_source_group
+            id: self.n_samples_repump for id in self.repump_sequencer.input_channels_group
         }
         self.input_samples_upscan = {
-            id: self.n_samples_upscan for id in self.upscan_sequencer.input_source_group
+            id: self.n_samples_upscan for id in self.upscan_sequencer.input_channels_group
         }
         self.input_samples_downscan = {
-            id: self.n_samples_downscan for id in self.downscan_sequencer.input_source_group
+            id: self.n_samples_downscan for id in self.downscan_sequencer.input_channels_group
         }
         # No readout delays for now.
-        self.readout_delays = {id: 0 for id in self.upscan_sequencer.input_source_group} | {id: 0 for id in self.repump_sequencer.input_source_group}
+        self.readout_delays = {id: 0 for id in self.upscan_sequencer.input_channels_group} | {id: 0 for id in self.repump_sequencer.input_channels_group}
         # Estimate the complete repump + scan cycle time and set the timeout (add 1 second buffer)
         self.timeout_repump = time_repump + 1
         self.timeout_upscan = time_up + 1
@@ -625,7 +625,7 @@ class PLEControllerPulsedRepumpSegmented(SequenceControllerBase):
         output_dict = {}
 
         # Get the names of the inputs and outputs
-        source_names = [key for key in self.upscan_sequencer.input_source_group] + [key for key in self.upscan_sequencer.output_source_group]
+        source_names = [key for key in self.upscan_sequencer.input_channels_group] + [key for key in self.upscan_sequencer.output_channels_group]
 
         # Iterate through the names of the sources to process the subpixels
         for name in source_names:

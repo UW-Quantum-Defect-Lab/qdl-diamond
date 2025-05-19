@@ -39,32 +39,32 @@ class NidaqSequencer(Sequence):
         # Get the source names for each input/output. This creates a dictionary with each key, value
         # pair giving the name of the `NidaqSequencerInput/OuputGroup` instances supplied and their
         # corresponding source names as a list.
-        self.input_source_names = {
-            name: input_group.source_names for name, input_group in inputs.items()
+        self.input_group_channels = {
+            name: input_group.channel_names for name, input_group in inputs.items()
         }
-        self.output_source_names = {
-            name: output_group.source_names for name, output_group in outputs.items()
+        self.output_group_channels = {
+            name: output_group.channel_names for name, output_group in outputs.items()
         }
         # We also want to invert the structure to determine which task a given input is associated
         # with. Thus we create a dictionary with inverted structure wherein each key is the name of
         # a given source and the value is the name of the corresponding 
         # `NidaqSequencerInput/OutputGroup`
-        self.input_source_group = {}
-        for group, sources in self.input_source_names.items():
+        self.input_channels_group = {}
+        for group, sources in self.input_group_channels.items():
             for source in sources:
                 # Names for the sources should be unique to avoid ambiguity in data reading/writing.
                 # If a source with a given name already exists then throw an error
-                if source in self.input_source_group:
+                if source in self.input_channels_group:
                     raise ValueError(f'The input source name {source} is redundantly defined.')
-                self.input_source_group[source] = group
-        self.output_source_group = {}
-        for group, sources in self.output_source_names.items():
+                self.input_channels_group[source] = group
+        self.output_channels_group = {}
+        for group, sources in self.output_group_channels.items():
             for source in sources:
                 # Names for the sources should be unique to avoid ambiguity in data reading/writing.
                 # If a source with a given name already exists then throw an error
-                if source in self.output_source_group:
+                if source in self.output_channels_group:
                     raise ValueError(f'The output source name {source} is redundantly defined.')
-                self.output_source_group[source] = group
+                self.output_channels_group[source] = group
 
 
     def run_sequence(
@@ -117,7 +117,7 @@ class NidaqSequencer(Sequence):
         # Check if any outputs should have a soft start and update if so
         for name in soft_start:
             # Perform a soft start if requested
-            if name in self.output_source_group and soft_start[name]:
+            if name in self.output_channels_group and soft_start[name]:
                 # Set to the value at the start of the data
                 self.set_output(output_name=name,setpoint=output_data[name][0])
 
@@ -218,10 +218,10 @@ class NidaqSequencer(Sequence):
             for name in names:
                 try:
                     # Look in the inputs dictionary
-                    data_dict = self.inputs[self.input_source_group[name]].data
+                    data_dict = self.inputs[self.input_channels_group[name]].data
                 except KeyError:
                     # If not in the inputs dictionary look in the output dictionary
-                    data_dict = self.outputs[self.output_source_group[name]].data
+                    data_dict = self.outputs[self.output_channels_group[name]].data
                 except:
                     raise KeyError(f'Provided source name {name} does not exist.')
                 # Store the retrieved data (update in place)
@@ -233,12 +233,12 @@ class NidaqSequencer(Sequence):
         # If specific names are not provided get all inputs and/or outputs.
         # Get the input source data
         if inputs is True:
-            for group in self.input_source_names:
+            for group in self.input_group_channels:
                 data |= self.inputs[group].data
 
         # Get the output source data
         if outputs is True:
-           for group in self.output_source_names:
+           for group in self.output_group_channels:
                 data |= self.outputs[group].data
 
         # Return the output dictionary
@@ -266,9 +266,9 @@ class NidaqSequencer(Sequence):
 
         # If no specific sources are requested plot them all
         if input_sources_to_plot is None:
-            input_sources_to_plot = list(self.input_source_group)
+            input_sources_to_plot = self.input_channels_group.keys()
         if output_sources_to_plot is None:
-            output_sources_to_plot = list(self.output_source_group)
+            output_sources_to_plot = self.output_channels_group.keys()
 
         # Create the figure
         total_num_sources = len(input_sources_to_plot) + len(output_sources_to_plot)
@@ -330,7 +330,7 @@ class NidaqSequencer(Sequence):
         Sets the value of the requested output source to the specified setpoint.
         '''
         # Set the value
-        self.outputs[self.output_source_group[output_name]].set(output_name=output_name,setpoint=setpoint)
+        self.outputs[self.output_channels_group[output_name]].set(output_name=output_name,setpoint=setpoint)
 
     def validate_output_data(
             self,
@@ -340,7 +340,7 @@ class NidaqSequencer(Sequence):
         '''
         Validates the provided data for output on the given output source
         '''
-        self.outputs[self.output_source_group[output_name]]._validate_data(output_name=output_name,data=data)
+        self.outputs[self.output_channels_group[output_name]]._validate_data(output_name=output_name,data=data)
 
     def _parse_sequence_params(
             self,
@@ -367,7 +367,7 @@ class NidaqSequencer(Sequence):
         tasks with different sample rates, or have some well-defined method of interpolating data.
         '''
         # Verify that the output data for sources within each output group is valid
-        for group, source_names in self.output_source_names.items():
+        for group, source_names in self.output_group_channels.items():
 
             # Check if the data is defined and if it is valid for the output soruce
             for src in source_names:
@@ -390,7 +390,7 @@ class NidaqSequencer(Sequence):
             
 
         # Append readout delays of zero for any sources not explicitly defined.
-        for group, source_names in self.input_source_names.items():
+        for group, source_names in self.input_group_channels.items():
             for src in source_names:
 
                 # Check that the input samples are valid and completely defined

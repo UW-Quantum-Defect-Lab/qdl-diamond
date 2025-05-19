@@ -7,7 +7,7 @@ import nidaqmx.errors
 import nidaqmx.stream_writers
 
 # Because we are on Python 3.9 type union operator `|` is not yet implemented
-from typing import Union
+from typing import Union, Any
 
 '''
 This file contains the `NidaqSequencerOutput` base class and its child classes which represent
@@ -41,34 +41,32 @@ class NidaqSequencerOutputGroup:
 
     def __init__(
             self,
-            device_channels_dict: dict[str, tuple[str,str]],
+            channels_config: dict[str, dict[str,Any]],
             **kwargs
     ) -> None:
         '''
         Parameters
         ----------
-        device_channels_dict: dict[str, tuple[str,str]]
-            A dictionary describing the name and corresponding DAQ device channels to write output
-            to. The keys are user-facing names of the output sources and the values are the
-            corresponding channel in the form of a tuple `(device, channel)` e.g. `('Dev1','ao0')`.
-
-            In implementations involving digital output, the "channel" can either be reinterpreted
-            as either `(device, port)` (e.g. `('Dev1','port0')`) for port-based writing or as
-            `(device, port/line)` (e.g. `('Dev1','port0/line0')) for line-based writing.
-
-            Note that the usage of dictionaries in this case necessitates that the order of the keys
-            is preserved (which is guaranteed in Python 3.7 and up). As a result, developers should
-            refrain from directly modifying the `device_channels_dict` attribute after 
-            instantiation.
-
+        channels_config: dict[str, dict[str,Any]]
+            A dictionary describing the channels included in the output group. The keys are the
+            user-facing names of the input channels while the values are dictionaries describing the
+            channel configuration. This "channel-configuration dictionary" should have the
+            appropriate key-value pairs for the type of output source, as specified by the relevant
+            child classes. In general, the channel-configuraiton dictionary should at least specify
+            the device and physical/software channel of the channel, e.g.
+            ```
+                {'device': 'Dev1', 'channel': 'ao0'}
+            ```
+            Note that the this class and higher-level functions rely on the ordered nature of the
+            dictionary and so internal methods should not modify this input after initialization.
             Finally, note that multi-device tasks are valid and should be accepted, however the
             prerequisite hardware and NI MAX configuration is required and not managed here.
         **kwargs:
             Any number of keyword arguments required for specific output implementations.
         '''
-        self.device_channels_dict = device_channels_dict
-        self.n_channels = len(device_channels_dict)
-        self.source_names = [name for name in device_channels_dict]
+        self.channels_config = channels_config
+        self.n_channels = len(channels_config)
+        self.channel_names = [name for name in channels_config]
 
         # Attributes to be utilized later
         self.task = None
@@ -169,28 +167,24 @@ class NidaqSequencerAOVoltageGroup(NidaqSequencerOutputGroup):
 
     def __init__(
             self,
-            device_channels_dict: dict[str, tuple[str,str]],
-            device_limits_dict: dict[str, tuple[float, float]]
+            channels_config: dict[str, dict[str,Any]]
     ) -> None:
         '''
         Parameters
         ----------
-        device_channels_dict: dict[str, tuple[str,str]]
-            A dictionary describing the name and corresponding DAQ device channels to write output
-            to. The keys are user-facing names of the output sources and the values are the
-            corresponding channel in the form of a tuple `(device, channel)` e.g. `('Dev1','ao0')`.
-            Note that multi-device tasks are valid and should be accepted, however the prerequisite
-            hardware and NI MAX configuration is required and not managed here.
-        device_limits_dict: dict[str, tuple[float, float]]
-            A dictionary describing the name and output voltage limits of the corresponding DAQ
-            device channels. The key should be a string matching the name given in the
-            `device_channels_dict` and the corresponding value should be a tuple of floats where the
-            first/second element gives the min/max voltage output allowed.
+        channels_config: dict[str, dict[str,Any]]
+            A dictionary describing the output channels to be included. The keys should be
+            user-facing names identifying the channels (e.g. "scan_laser") and the values describe
+            the configuration of the channel. The channel configuration requires four items for the
+            `device`, `channel`, `min`/`max` output values respectively, e.g. 
+            ```
+                {'device': 'Dev1', 'channel': 'ao0', 'min': -5, 'max': 5}
+            ```
+            Finally, note that multi-device tasks are valid and should be accepted, however the
+            prerequisite hardware and NI MAX configuration is required and not managed here.
         '''
         # Run the main initialization
-        super().__init__(device_channels_dict=device_channels_dict)
-        # Save the device limits dictionary
-        self.device_limits_dict = device_limits_dict
+        super().__init__(channels_config=channels_config)
 
     def build(
             self,
@@ -221,12 +215,12 @@ class NidaqSequencerAOVoltageGroup(NidaqSequencerOutputGroup):
         try:
             # Validate the data first before continuing. We iterate through the local attribute
             # `device_channels_dict` to ensure that all contained device channels are represented.
-            for output_name in self.device_channels_dict:
+            for output_name in self.channels_config:
                 self._validate_data(output_name=output_name, data=data[output_name])
             # Save the data to write to the instance, this clears any extra names passed in the data
-            self.data = {name: data[name] for name in self.device_channels_dict}
+            self.data = {name: data[name] for name in self.channels_config}
             # Save other parameters
-            self.n_samples = np.max([len(data[name]) for name in self.device_channels_dict])
+            self.n_samples = np.max([len(data[name]) for name in self.channels_config])
             self.clock_device = clock_device
             self.clock_terminal = clock_terminal
             self.sample_rate = sample_rate
@@ -234,8 +228,8 @@ class NidaqSequencerAOVoltageGroup(NidaqSequencerOutputGroup):
             # Create the task
             self.task = nidaqmx.Task()
             # Create an AO voltage channel for each device channel supplied
-            for output_name, (device, channel) in self.device_channels_dict.items():
-                self.task.ao_channels.add_ao_voltage_chan(device+'/'+channel)
+            for output_name, config in self.channels_config.items():
+                self.task.ao_channels.add_ao_voltage_chan(config['device']+'/'+config['channel'])
             # Configure the timing. For now, we are hard-coding in the use of the digital input 
             # sample clock as the timing source and start trigger. In the future it would be better
             # to dynamically program this in by simply passing the "clock task".
@@ -248,7 +242,7 @@ class NidaqSequencerAOVoltageGroup(NidaqSequencerOutputGroup):
             # Write the data to the task, must be an np.ndarray with shape `n_channels` by 
             # `n_samples` so we reshape it first. Iterating through the `device_channels_dict`
             # ensures that the data is supplied in the same order as the channels were added.
-            data_to_write = np.array([self.data[name] for name in self.device_channels_dict])
+            data_to_write = np.array([self.data[name] for name in self.channels_config])
             # Then create a writer and set the data
             self.writer = nidaqmx.stream_writers.AnalogMultiChannelWriter(self.task.out_stream)
             self.writer.write_many_sample(data=data_to_write, timeout=self.n_samples/sample_rate + 1)
@@ -280,10 +274,10 @@ class NidaqSequencerAOVoltageGroup(NidaqSequencerOutputGroup):
         # Verifty the setpoint is in range
         self._validate_data(output_name=output_name, data=setpoint)
         # Get the device and channel for the output
-        device, channel = self.device_channels_dict[output_name]
+        config = self.channels_config[output_name]
         # Create a task on the voltage output, write the desired voltage
         with nidaqmx.Task() as task:
-            task.ao_channels.add_ao_voltage_chan(device+'/'+channel)
+            task.ao_channels.add_ao_voltage_chan(config['device']+'/'+config['channel'])
             task.write(setpoint)
 
     def _validate_data(
@@ -302,14 +296,16 @@ class NidaqSequencerAOVoltageGroup(NidaqSequencerOutputGroup):
             Some data to validate.
         '''
         # Get the limits for the specified channels
-        limits = self.device_limits_dict[output_name]
+        config = self.channels_config[output_name]
+        min = config['min']
+        max = config['max']
         try:
             data = np.array(data)
         except:
             raise TypeError(f'Data type {type(data).__name__} is not a valid type.')
-        if np.any(data < self.device_limits_dict[output_name][0]):
-            raise ValueError(f'Data contains points less than allowed minimum {limits[0]:.3f}.')
-        if np.any(data > self.device_limits_dict[output_name][1]):
-            raise ValueError(f'Data contains points greater than allowed maximum {limits[1]:.3f}.')
+        if np.any(data < min):
+            raise ValueError(f'Data contains points less than allowed minimum {min:.3f}.')
+        if np.any(data > max):
+            raise ValueError(f'Data contains points greater than allowed maximum {max:.3f}.')
         
 
