@@ -17,11 +17,13 @@ from qdlutils.applications.qdlple2.application_gui import (
 )
 import qdlutils.applications.qdlscope.main as qdlscope
 
+from typing import Union, Any
+
 logger = logging.getLogger(__name__)
 logging.basicConfig()
 
 CONFIG_PATH = 'qdlutils.applications.qdlple2.config_files'
-DEFAULT_CONFIG_FILE = 'qdlple_base.yaml'
+DEFAULT_CONFIG_FILE = 'qdlple2_base.yaml'
 
 # Default color map
 DEFAULT_COLOR_MAP = 'gray'
@@ -73,7 +75,7 @@ class LauncherApplication:
         self.ouptut_source_names = None
 
         # Load the YAML file
-        #self.configure_from_yaml(yaml_filename=default_config_filename)
+        self.configure_from_yaml(yaml_filename=default_config_filename)
 
         # Initialize the root tkinter widget (window housing GUI)
         if self.is_root_process:
@@ -131,20 +133,95 @@ class LauncherApplication:
         ctrl_import_path = controller_config['import_path']
         ctrl_class_name = controller_config['class_name']
         module = importlib.import_module(ctrl_import_path)
-        logger.debug(f"Importing {ctrl_import_path}")
+        logger.debug(f'Importing {ctrl_import_path}')
         constructor = getattr(module, ctrl_class_name)
+        # Load the controller input parameters
+        ctrl_params = controller_config['configure']
 
-        # Get the application controller parameters
-        ctrl_class_params = controller_config['configure']
-        # Determine the input/output groups for the repump and scan then create the instances and
-        # load into the corresponding dict.
-        for group in ctrl_class_params['scan_inputs']:
-            # Get the group dictionary
+        # Load the scan inputs
+        scan_inputs, scan_inputs_instr = self._load_io_groups(
+            groups_to_load=ctrl_params['scan_inputs'],
+            hardware_config=hardware_config,
+            channel_config=channel_config
+        )
+        # Load the scan outputs
+        scan_outputs, scan_outputs_instr = self._load_io_groups(
+            groups_to_load=ctrl_params['scan_outputs'],
+            hardware_config=hardware_config,
+            channel_config=channel_config
+        )
+        # Load the repump inputs
+        repump_inputs, repump_inputs_instr = self._load_io_groups(
+            groups_to_load=ctrl_params['repump_inputs'],
+            hardware_config=hardware_config,
+            channel_config=channel_config
+        )
+        # Load the scan outputs
+        repump_outputs, repump_outputs_instr = self._load_io_groups(
+            groups_to_load=ctrl_params['repump_outputs'],
+            hardware_config=hardware_config,
+            channel_config=channel_config
+        )
+
+        # Add/update the controller parameters
+        ctrl_params['scan_inputs'] = scan_inputs
+        ctrl_params['scan_outputs'] = scan_outputs
+        ctrl_params['repump_inputs'] = repump_inputs
+        ctrl_params['repump_outputs'] = repump_outputs
+        ctrl_params['process_instructions'] = {
+            **scan_inputs_instr, **scan_outputs_instr, **repump_inputs_instr, **repump_outputs_instr
+        }
+
+        # Create the controller
+        self.application_controller = constructor(**ctrl_params)
+        
+    def _load_io_groups(
+            self,
+            groups_to_load: dict[str,Any],
+            hardware_config: dict[str,Any],
+            channel_config: dict[str,Any]
+    ):
+        '''
+        Creates dictionary of input/output groups specified by the controller YAML configuration
+
+        Parameters
+        ----------
+        name: str
+            Name of the inputs/outputs to load
+
+        Returns
+        -------
+        groups: dict[str,dict[str,Any]]
+            A dictionary of the input/output groups associated to the controller parameter specified
+            by the `name`.
+        process_instructions: dict[str,str]
+            Process instructions for the channels in the loaded groups
+        '''
+        # Dictionaries to hold the io groups and process instructions 
+        groups = {}
+        process_instructions = {}
+        # Iterate through the groups, construct them and then save them in the `groups` dict.
+        for group in groups_to_load:
+            # Get the group configuration dictionary
             group_dict = hardware_config[group]
-            # Get the channels
-            # Load the channels
+            # Get the path and class name, make the constructor
+            group_import_path = group_dict['import_path']
+            group_class_name = group_dict['class_name']
+            module = importlib.import_module(group_import_path)
+            logger.debug(f'Importing {group_import_path}')
+            group_constructor = getattr(module, group_class_name)
+            # Get the channels. This is a dicitonary where each key-value pair describes a channel 
+            # in the group and it's corresponding configuration information.
+            channels = {}
+            for channel in group_dict['channels']:
+                # Get the channel config dict
+                channels[channel] = channel_config[channel]
+                if channel_config[channel]['process_instructions'] is not None:
+                    process_instructions[channel] = channel_config[channel]['process_instructions']
+            # Add groups to output dictionary
+            groups[group] = group_constructor(channels_config = channels)
 
-
+        return groups, process_instructions
 
     def set_laser(
             self,
@@ -203,12 +280,42 @@ class LauncherApplication:
             self
     ) -> None:
         '''
-        Reads the current input from the GUI, checks that input is of the valid form, the
-        application controller is in charge of ensuring that the data is in bounds.
+        Reads the current input from the GUI and saves data to `self.gui_input`. Returns the scan
+        configuration dictionary
         '''
 
+        # Read the values from the GUI
+        min = float(self.view.control_panel.voltage_start_entry.get())
+        max = float(self.view.control_panel.voltage_end_entry.get())
+        n_pixels_up = int(self.view.control_panel.num_pixels_up_entry.get())
+        n_pixels_down = int(self.view.control_panel.num_pixels_down_entry.get())
+        n_subpixels = int(self.view.control_panel.subpixel_entry.get())
+        time_up = float(self.view.control_panel.upsweep_time_entry.get())
+        time_down = float(self.view.control_panel.downsweep_time_entry.get())
+        time_repump = float(self.view.control_panel.repump_entry.get())
+        n_scans = int(self.view.control_panel.scan_num_entry.get())
+        set_voltage = float(self.view.control_panel.voltage_entry.get())
+
+        # Get the scan configuration parameters
+        scan_config_params = {
+            'min' : min,
+            'max' : max,
+            'n_pixels_up' : n_pixels_up,
+            'n_pixels_down' :  n_pixels_down,
+            'n_subpixels' : n_subpixels,
+            'time_up' : time_up,
+            'time_down' : time_down,
+            'time_repump' : time_repump,
+        }
+
         # Set the GUI input
-        self.gui_input
+        self.gui_input = {
+            **scan_config_params,
+            'n_scans' : n_scans,
+            'set_voltage' : set_voltage
+        }
+
+        return scan_config_params
 
     def start_scan(
             self,
@@ -223,8 +330,8 @@ class LauncherApplication:
         logger.info('Starting PLE scans.')
         # Update the parameters
         try:
-            # 
-            self._read_gui()
+            # Read the gui and get the scan parameters
+            scan_parameters = self._read_gui()
         except Exception as e:
             logger.error(f'Scan parameters are invalid: {e}')
             return None
@@ -234,10 +341,10 @@ class LauncherApplication:
         self.current_scan = ScanApplication(
             parent_application = self,
             application_controller = self.application_controller,
+            scan_parameters=scan_parameters,
+            n_scans = self.gui_input['n_scans'],
             id = str(self.number_scans).zfill(3)
         )
-    
-
     
 
 
@@ -247,21 +354,23 @@ class ScanApplication:
             self,
             parent_application: LauncherApplication,
             application_controller: PLEControllerBase,
-            parameters: dict,
+            scan_parameters: dict,
+            n_scans: int,
             id: str
     ):
         self.parent_application = parent_application
         self.application_controller = application_controller
-        self.parameters = parameters
+        self.scan_parameters = scan_parameters
+        self.n_scans = n_scans
         self.id = id
         self.timestamp = datetime.datetime.now()
 
         # Create a dictionary to store the data
         self.data = {}
 
-        # Configure the sequencer
+        # Configure the sequencer, an error will be thrown 
         self.application_controller.configure_sequence(
-            **parameters
+            **scan_parameters
         )
 
         # Then initialize the GUI
@@ -270,7 +379,7 @@ class ScanApplication:
         self.view = ScanApplicationView(
                 window=self.root, 
                 application=self,
-                settings_dict=parent_application.scan_parameters
+                settings_dict={**scan_parameters, 'n_scans': n_scans}
         )
 
         # Bind the buttons
@@ -287,7 +396,7 @@ class ScanApplication:
 
         try:
             for scan_data in self.application_controller.run_n_sequences(
-                    n=self.parameters['n_scans'],
+                    n=self.n_scans,
                     process_method=self.application_controller.process_data,
                     process_kwargs=self.application_controller.process_instructions,
             ):
