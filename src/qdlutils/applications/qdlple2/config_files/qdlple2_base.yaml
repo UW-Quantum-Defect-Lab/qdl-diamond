@@ -1,7 +1,7 @@
 qdlple2:
   ApplicationController :
     import_path : qdlutils.applications.qdlple2.application_controller
-    class_name : PleScanner
+    class_name : PLEControllerPulsedRepumpSegmented
     configure :
       scan_inputs:
         - scan_ci_rate    # These point to the hardware groups defined below
@@ -17,12 +17,12 @@ qdlple2:
       repump_clock_device: Dev2
       repump_clock_channel: ctr0
       repump_clock_terminal: PFI12
-      scan_laser_id : scan_laser      # The name of the scan laser as defined below
-      repump_laser_id : repump_laser  # The name of the repump laser as defined below
-      counter_id : counter            # The name of the counter as defined below
+      scan_laser_id : scan_laser_voltage      # The name of the scan laser as defined below
+      repump_laser_id : repump_laser_voltage  # The name of the repump laser as defined below
+      counter_id : counter_rate               # The name of the counter as defined below
       repump_laser_setpoints:
-        off: 0  # Reconfigure these as needed for your repump type
-        on:  1
+        'off': 0  # Reconfigure these as needed for your repump type
+        'on':  1
     
   HardwareGroups:
 
@@ -39,7 +39,7 @@ qdlple2:
       
     scan_ci_rate:
       import_path: qdlutils.hardware.nidaq.synchronous.nidaqsequencerinputgroup
-      class_name : NidaqSequencerCiEdgeRateGroup
+      class_name : NidaqSequencerCIEdgeRateGroup
       channels:
         - counter_rate
 

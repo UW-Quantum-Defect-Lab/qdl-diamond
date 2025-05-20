@@ -171,8 +171,8 @@ class LauncherApplication:
         self.application_controller = constructor(**ctrl_params)
 
         # Save the scan input channel names to the application
-        for group in scan_inputs:
-            self.scan_input_channels += group.keys()
+        for group in scan_inputs.values():
+            self.scan_input_channels += group.channel_names
         
     def _load_io_groups(
             self,
@@ -384,8 +384,13 @@ class ScanApplication:
         # Bind the buttons
         self.view.control_panel.stop_button.bind("<Button>", self.stop_scan)
         self.view.control_panel.save_button.bind("<Button>", self.save_scan)
-        #self.view.control_panel.norm_button.bind("<Button>", self.set_normalize)
-        #self.view.control_panel.autonorm_button.bind("<Button>", self.auto_normalize)
+        self.view.control_panel.norm_button.bind("<Button>", self.set_normalize)
+        self.view.control_panel.autonorm_button.bind("<Button>", self.auto_normalize)
+
+        # Bind the variables to update when changed
+        self.view.control_panel.selected_option.trace_add(mode='write', callback=self.update_data_to_plot)
+        self.view.control_panel.plot_scans.trace_add(mode='write', callback=self.toggle_plot_lines)
+        self.view.control_panel.average_scans.trace_add(mode='write', callback=self.toggle_average_lines)
 
         # Launch the thread
         self.scan_thread = Thread(target=self.scan_thread_function)
@@ -397,14 +402,14 @@ class ScanApplication:
             for scan_data in self.application_controller.run_n_sequences(
                     n=self.n_scans,
                     process_method=self.application_controller.process_data,
-                    process_kwargs=self.application_controller.process_instructions,
+                    process_kwargs={'instructions': self.application_controller.process_instructions},
             ):
                 # Each yield gets new `scan_data` which is a dictionary with all the entires defined
                 # in `PLEController.process_data()`. We will generally not know what these are ahead
                 # of time and so we must programatically define them.
                 # The first time we need to just save the data directly, here using a dictionary
                 # comprehension to place the values in lists:
-                if self.data is None:
+                if self.data == {}:
                     self.data = {k: [v,] for k,v in scan_data.items()}
                 # On the later scans we can simply append
                 else:
@@ -419,7 +424,8 @@ class ScanApplication:
             logger.info('Scan complete.')
 
         except Exception as e:
-            logger.error(f'Error in scan thread: {e}')
+            raise e
+            #logger.error(f'Error in scan thread: {e}')
 
     def stop_scan(
             self,
@@ -504,9 +510,72 @@ class ScanApplication:
             for source, data in self.data:
                 df.create_dataset(name=source, data=data)
 
+    def set_normalize(
+            self,
+            tkinter_event: tk.Event = None
+    ) -> None:
+        '''
+        Callback function to set the normalization of the figure based off of the values
+        written to the GUI.
+        '''
+        # Get the value from the controller
+        norm_min = float(self.view.control_panel.image_minimum.get())
+        norm_max = float(self.view.control_panel.image_maximum.get())
 
+        if norm_min > norm_max:
+            raise ValueError(f'Minimum norm value {norm_min} > {norm_max}.')
+        if norm_min < 0:
+            raise ValueError(f'Minimum norm cannot be less than 0.')
 
+        # Save the minimum/maximum norm
+        self.view.norm_min = norm_min
+        self.view.norm_max = norm_max
 
+        self.view.update_figure()
+
+    def auto_normalize(
+            self,
+            tkinter_event: tk.Event = None
+    ) -> None:
+        '''
+        Callback function to autonormalize the figure.
+        '''
+        # Save the minimum/maximum norm
+        self.view.norm_min = None
+        self.view.norm_max = None
+
+        self.view.update_figure()
+
+    def update_data_to_plot(
+            self,
+            *args: Any
+    ) -> None:
+        '''
+        The trace call back provides many arguments but we do not utilize them here.
+        '''
+        # Set the data to plot as the selected value
+        self.view.data_to_plot_y = self.view.control_panel.selected_option.get()
+        # Update the figure
+        self.view.update_figure()
+
+    def toggle_plot_lines(
+            self,
+            *args: Any
+    ) -> None:
+        # Set the internal flag to plot the lines
+        self.view.plot_lines = self.view.control_panel.plot_scans.get()
+        # Update the figure
+        self.view.update_figure()
+        
+    def toggle_average_lines(
+            self,
+            *args: Any
+    ) -> None:
+        # Set the internal flag to average the lines
+        self.view.average_lines = self.view.control_panel.average_scans.get()
+        # Update the figure
+        self.view.update_figure()
+        
 
 
 def main(is_root_process=True):

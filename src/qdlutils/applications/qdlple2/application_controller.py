@@ -502,9 +502,9 @@ class PLEControllerPulsedRepumpSegmented(SequenceControllerBase):
         scan_samples_downscans = np.linspace(start=max, stop=min, num=self.n_samples_downscan, endpoint=False)
 
         # Compute output datstream for the repump laser
-        # Laser is on during the repump step and shut off for the last step.
+        # Laser is on during the repump step and shut off for the last two steps
         repump_samples_repump = np.array(
-            [self.repump_laser_setpoints['on'],]*(self.n_samples_repump-1) + [self.repump_laser_setpoints['off']],
+            [self.repump_laser_setpoints['on'],]*(self.n_samples_repump-1) + [self.repump_laser_setpoints['off'],]*2,
             dtype=np.float64
         )
 
@@ -547,20 +547,18 @@ class PLEControllerPulsedRepumpSegmented(SequenceControllerBase):
             process_kwargs: dict = {}
     ) -> Union[dict[str,np.ndarray], Any]:
         
-        # Run the repump sequence if time > 0.
-        if self.time_repump > 0:
-            logger.info('Starting repump...')
-            self.repump_sequencer.run_sequence(
-                clock_rate=self.sample_rate_repump,
-                output_data=self.output_data_repump,
-                input_samples=self.input_samples_repump,
-                readout_delays=self.readout_delays,
-                soft_start=self.soft_start,
-                timeout=self.timeout_repump
-            )
-            logger.info('Finished repump.')
-        # Get the data as a dictionary with names appended with repump/upscan/downscan, if repump
-        # time is zero, then all entries will be none.
+        # Run the repump sequence
+        logger.info('Starting repump...')
+        self.repump_sequencer.run_sequence(
+            clock_rate=self.sample_rate_repump,
+            output_data=self.output_data_repump,
+            input_samples=self.input_samples_repump,
+            readout_delays=self.readout_delays,
+            soft_start=self.soft_start,
+            timeout=self.timeout_repump
+        )
+        logger.info('Finished repump.')
+        # Get the data as a dictionary with names appended with repump/upscan/downscan
         repump_data = {
             'repump_'+id: val for id,val in self.repump_sequencer.get_data().items()
         }

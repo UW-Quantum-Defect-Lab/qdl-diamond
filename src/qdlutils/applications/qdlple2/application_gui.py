@@ -47,19 +47,19 @@ class LauncherControlPanel:
         row += 1
         tk.Label(settings_frame, text="Min voltage (V)").grid(row=row, column=0)
         self.voltage_start_entry = tk.Entry(settings_frame, width=10)
-        self.voltage_start_entry.insert(0, -3)
+        self.voltage_start_entry.insert(0, 0)
         self.voltage_start_entry.grid(row=row, column=1)
         # Max voltage
         row += 1
         tk.Label(settings_frame, text="Max voltage (V)").grid(row=row, column=0)
         self.voltage_end_entry = tk.Entry(settings_frame, width=10)
-        self.voltage_end_entry.insert(0, 5)
+        self.voltage_end_entry.insert(0, 1)
         self.voltage_end_entry.grid(row=row, column=1)
         # Number of pixels on upsweep
         row += 1
         tk.Label(settings_frame, text="# of pixels up").grid(row=row, column=0)
         self.num_pixels_up_entry = tk.Entry(settings_frame, width=10)
-        self.num_pixels_up_entry.insert(0, 150)
+        self.num_pixels_up_entry.insert(0, 100)
         self.num_pixels_up_entry.grid(row=row, column=1)
         # Number of pixels on downsweep
         row += 1
@@ -77,7 +77,7 @@ class LauncherControlPanel:
         row += 1
         tk.Label(settings_frame, text="Upsweep time (s)").grid(row=row, column=0)
         self.upsweep_time_entry = tk.Entry(settings_frame, width=10)
-        self.upsweep_time_entry.insert(0, 3)
+        self.upsweep_time_entry.insert(0, 1)
         self.upsweep_time_entry.grid(row=row, column=1)
         # Time for the downsweep max -> min
         row += 1
@@ -96,7 +96,7 @@ class LauncherControlPanel:
         row += 1
         tk.Label(settings_frame, text="# of sub-pixels").grid(row=row, column=0)
         self.subpixel_entry = tk.Entry(settings_frame, width=10)
-        self.subpixel_entry.insert(0, 4)
+        self.subpixel_entry.insert(0, 16)
         self.subpixel_entry.grid(row=row, column=1)
         # Button to enable repump at start of scan?
         row += 1
@@ -150,10 +150,6 @@ class ScanApplicationView:
         self.application = application
         self.settings_dict = settings_dict
 
-        # Create the GUI elements
-        self.data_viewport = ImageDataViewport(window=window)
-        self.control_panel = ImageFigureControlPanel(window=window, settings_dict=settings_dict)
-
         # Figure properties
         self.norm_min = None
         self.norm_max = None
@@ -162,10 +158,19 @@ class ScanApplicationView:
         # If the data viewport should average the lines
         self.average_lines = False
         # Names of all input sources to plot
-        self.plot_options = application.application_controller.scan_input_channels
+        self.plot_options = application.parent_application.scan_input_channels
         # Name of data channels to plot, defaults to the counter vs scan laser
         self.data_to_plot_x = application.application_controller.scan_laser_id
         self.data_to_plot_y = application.application_controller.counter_id
+
+        # Create the GUI elements
+        self.data_viewport = ImageDataViewport(window=window)
+        self.control_panel = ImageFigureControlPanel(
+            window=window, 
+            settings_dict=settings_dict,
+            data_options=self.plot_options,
+            data_default=self.data_to_plot_y
+        )
 
         # tkinter right click menu
         self.rclick_menu = tk.Menu(window, tearoff = 0) 
@@ -198,7 +203,10 @@ class ScanApplicationView:
         y_max = 1 + self.application.scan_parameters['n_pixels_down']/self.application.scan_parameters['n_pixels_up'] 
 
         # Compute the extent of the image
-        data_to_plot = self.application.data[self.data_to_plot_y]
+        if self.data_to_plot_y in self.application.data:
+            data_to_plot = np.array(self.application.data[self.data_to_plot_y])
+        else:
+            data_to_plot = np.array([[]]) # If there is no data to plot, make empty array
         n_completed_scans = len(data_to_plot)
         extent = [0.5, 
                   n_completed_scans+0.5,
@@ -206,11 +214,11 @@ class ScanApplicationView:
                   y_max]
         # Plot the data
         img = self.data_viewport.ax.imshow(
-            data_to_plot,
+            data_to_plot.T,
             extent = extent,
-            cmap = self.application.cmap,
+            cmap = 'Blues', # Default colormap
             origin = 'lower',
-            aspect = 'equal',
+            aspect = 'auto',
             interpolation = 'none'
         )
         # Set the x ticks
@@ -234,7 +242,7 @@ class ScanApplicationView:
         self.data_viewport.ax.set_xlabel('Scan number', fontsize=14)
         self.data_viewport.ax.set_ylabel(self.data_to_plot_x, fontsize=14)
         self.data_viewport.cbar.ax.set_ylabel(self.data_to_plot_y, fontsize=14, rotation=270, labelpad=15)
-        self.data_viewport.ax.grid(alpha=0.3)
+        self.data_viewport.ax.grid(alpha=0.3, axis='y')
         # Normalize the figure if not already normalized
         if (self.norm_min is not None) and (self.norm_max is not None):
             img.set_norm(plt.Normalize(vmin=self.norm_min, vmax=self.norm_max))
@@ -251,20 +259,24 @@ class ScanApplicationView:
             num=self.application.scan_parameters['n_pixels_down']+self.application.scan_parameters['n_pixels_up'])
 
         # Determine the data to plot
-        data_to_plot = self.application.data[self.data_to_plot_y]
+        if self.data_to_plot_y in self.application.data:
+            data_to_plot = self.application.data[self.data_to_plot_y]
+        else:
+            # If there is no data to plot, make empty array
+            data_to_plot = [np.empty(self.application.scan_parameters['n_pixels_down']+self.application.scan_parameters['n_pixels_up']),] 
         n_completed_scans = len(data_to_plot)
         if self.average_lines:
             data_to_plot = [np.average(data_to_plot, axis=0),]
         n_lines_to_plot = len(data_to_plot)
         # Get the color map
-        colors = plt.cm.inferno(np.linspace(0,1,n_lines_to_plot))    
+        colors = plt.cm.viridis(np.linspace(0,1,n_lines_to_plot))    
         # plot the data
         for line, c in zip(data_to_plot, colors):
             self.data_viewport.ax.plot(
                 unitless_voltages,
                 line,
                 '-',
-                c = c
+                c=c
             )    
         # Set the x limits
         self.data_viewport.ax.set_xlim(0,y_max)
@@ -304,7 +316,13 @@ class ImageDataViewport:
 
 class ImageFigureControlPanel:
 
-    def __init__(self, window: tk.Toplevel, settings_dict: dict):
+    def __init__(
+            self, 
+            window: tk.Toplevel, 
+            settings_dict: dict, 
+            data_options: list, 
+            data_default: str
+    ):
 
         # Parent frame for control panel
         frame = tk.Frame(window)
@@ -320,12 +338,11 @@ class ImageFigureControlPanel:
                  font='Helvetica 14').grid(row=row, column=0, pady=[0,5], columnspan=2)
         # Pause button
         row += 1
-        self.pause_button = tk.Button(command_frame, text='Pause scan', width=15)
-        self.pause_button.grid(row=row, column=0, columnspan=2, pady=[5,1])
+        self.stop_button = tk.Button(command_frame, text='Stop scan', width=10)
+        self.stop_button.grid(row=row, column=0, columnspan=1, padx=5, pady=[0,5])
         # Continue button
-        row += 1
-        self.save_button = tk.Button(command_frame, text='Save scan', width=15)
-        self.save_button.grid(row=row, column=0, columnspan=2, pady=[5,1])
+        self.save_button = tk.Button(command_frame, text='Save scan', width=10)
+        self.save_button.grid(row=row, column=1, columnspan=1, padx=5, pady=[0,5])
 
         # ===============================================================================
         # Add more buttons or controls here
@@ -413,14 +430,35 @@ class ImageFigureControlPanel:
         self.image_maximum = tk.Entry(image_settings_frame, width=10)
         self.image_maximum.insert(0, 10000)
         self.image_maximum.grid(row=row, column=1, padx=5, pady=2)
-        # Set normalization button
-        row += 1
-        self.norm_button = tk.Button(image_settings_frame, text='Normalize', width=15)
-        self.norm_button.grid(row=row, column=0, columnspan=2, pady=[5,1])
+
+        # Scan settings view
+        image_settings_buttons_frame = tk.Frame(frame)
+        image_settings_buttons_frame.pack(side=tk.TOP, padx=0, pady=0)
+        # Single axis scan section
+        row = 1
+        self.norm_button = tk.Button(image_settings_buttons_frame, text='Normalize', width=10)
+        self.norm_button.grid(row=row, column=0, columnspan=1, padx=5, pady=[5,1])
         # Autonormalization button
+        self.autonorm_button = tk.Button(image_settings_buttons_frame, text='Auto-norm', width=10)
+        self.autonorm_button.grid(row=row, column=1, columnspan=1, padx=5, pady=[5,1])
+        # Data to plot selection
         row += 1
-        self.autonorm_button = tk.Button(image_settings_frame, text='Auto-normalize', width=15)
-        self.autonorm_button.grid(row=row, column=0, columnspan=2, pady=[1,1])
+        self.selected_option = tk.StringVar(image_settings_buttons_frame)
+        self.selected_option.set(data_default)  # Set the default option
+        self.selection_dropdown = tk.OptionMenu(image_settings_buttons_frame, self.selected_option, *data_options)
+        self.selection_dropdown.grid(row=row, column=0, columnspan=2, padx=5, pady=5)
+        # Image toggle
+        row += 1
+        self.plot_scans = tk.IntVar()
+        self.plot_scans_toggle = tk.Checkbutton ( 
+            image_settings_buttons_frame, var=self.plot_scans, text='Plot scans')
+        self.plot_scans_toggle.grid(row=row, column=0, pady=[0,0], columnspan=1)
+        # Integrate toggle
+        self.average_scans = tk.IntVar()
+        self.average_scans_toggle = tk.Checkbutton ( 
+            image_settings_buttons_frame, var=self.average_scans, text='Avg. scans')
+        self.average_scans_toggle.grid(row=row, column=1, pady=[0,0], columnspan=1)
+
 
         # ===============================================================================
         # Add more buttons or controls here
