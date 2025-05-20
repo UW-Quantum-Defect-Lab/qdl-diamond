@@ -293,7 +293,7 @@ class LauncherApplication:
         time_down = float(self.view.control_panel.downsweep_time_entry.get())
         time_repump = float(self.view.control_panel.repump_entry.get())
         n_scans = int(self.view.control_panel.scan_num_entry.get())
-        set_voltage = float(self.view.control_panel.voltage_entry.get())
+        laser_setpoint = float(self.view.control_panel.laser_setpoint.get())
 
         # Get the scan configuration parameters
         scan_config_params = {
@@ -311,7 +311,7 @@ class LauncherApplication:
         self.gui_input = {
             **scan_config_params,
             'n_scans' : n_scans,
-            'set_voltage' : set_voltage
+            'laser_setpoint' : laser_setpoint
         }
 
         return scan_config_params
@@ -501,13 +501,13 @@ class ScanApplication:
 
             # Save the scan settings
             # Run through the scan parameters dictionary saving data 
-            ds = df.create_dataset('scan_parameters')
+            ds = df.create_dataset('scan_parameters', data=np.array([]))
             for param, val in self.scan_parameters.items():
                 ds.attrs[param] =  val
             ds.attrs['n_scans'] = self.n_scans
 
             # Save the data
-            for source, data in self.data:
+            for source, data in self.data.items():
                 df.create_dataset(name=source, data=data)
 
     def set_normalize(

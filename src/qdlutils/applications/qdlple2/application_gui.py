@@ -47,19 +47,19 @@ class LauncherControlPanel:
         row += 1
         tk.Label(settings_frame, text="Min voltage (V)").grid(row=row, column=0)
         self.voltage_start_entry = tk.Entry(settings_frame, width=10)
-        self.voltage_start_entry.insert(0, 0)
+        self.voltage_start_entry.insert(0, -3)
         self.voltage_start_entry.grid(row=row, column=1)
         # Max voltage
         row += 1
         tk.Label(settings_frame, text="Max voltage (V)").grid(row=row, column=0)
         self.voltage_end_entry = tk.Entry(settings_frame, width=10)
-        self.voltage_end_entry.insert(0, 1)
+        self.voltage_end_entry.insert(0, 5)
         self.voltage_end_entry.grid(row=row, column=1)
         # Number of pixels on upsweep
         row += 1
         tk.Label(settings_frame, text="# of pixels up").grid(row=row, column=0)
         self.num_pixels_up_entry = tk.Entry(settings_frame, width=10)
-        self.num_pixels_up_entry.insert(0, 100)
+        self.num_pixels_up_entry.insert(0, 200)
         self.num_pixels_up_entry.grid(row=row, column=1)
         # Number of pixels on downsweep
         row += 1
@@ -77,7 +77,7 @@ class LauncherControlPanel:
         row += 1
         tk.Label(settings_frame, text="Upsweep time (s)").grid(row=row, column=0)
         self.upsweep_time_entry = tk.Entry(settings_frame, width=10)
-        self.upsweep_time_entry.insert(0, 1)
+        self.upsweep_time_entry.insert(0, 10)
         self.upsweep_time_entry.grid(row=row, column=1)
         # Time for the downsweep max -> min
         row += 1
@@ -118,17 +118,9 @@ class LauncherControlPanel:
         row += 1
         self.goto_button = tk.Button(control_frame, text="Set voltage (V)", width=12)
         self.goto_button.grid(row=row, column=0)
-        self.voltage_entry = tk.Entry(control_frame, width=10)
-        self.voltage_entry.insert(0, 0)
-        self.voltage_entry.grid(row=row, column=1, padx=10)
-        # Getter for the voltage (based off of the latest set value)
-        row += 1
-        self.get_button = tk.Button(control_frame, text="Get voltage (V)", width=12)
-        self.get_button.grid(row=row, column=0)
-        self.voltage_show = tk.Entry(control_frame, width=10)
-        self.voltage_show.insert(0, 0)
-        self.voltage_show.grid(row=row, column=1)
-        self.voltage_show.config(state='readonly') # Disable the voltage show
+        self.laser_setpoint = tk.Entry(control_frame, width=10)
+        self.laser_setpoint.insert(0, 1)
+        self.laser_setpoint.grid(row=row, column=1, padx=10)
         # Getter for the voltage (based off of the latest set value)
         row += 1
         self.repump_laser_on = tk.IntVar()

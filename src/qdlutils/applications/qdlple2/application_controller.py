@@ -660,3 +660,32 @@ class PLEControllerPulsedRepumpSegmented(SequenceControllerBase):
 
         # Return the data
         return output_dict
+
+    def set_output(
+            self,
+            output_id: str,
+            setpoint: Union[float, int, bool]
+    ) -> None:
+        '''
+        Sets the output of the controller specified by `output_id` to the `setpoint`.
+        '''
+        # Block action if busy
+        if self.busy:
+            raise RuntimeError('Controller is currently in use.')
+        # Reserve the controller
+        self.busy=True
+        # Attempt to set the value of the specified output to the set point using the repump sequencer
+        try:
+            self.repump_sequencer.set_output(output_name = output_id, setpoint=setpoint)
+        except KeyError:
+            # Attempt to set the value using the upscan sequencer
+            try:
+                self.upscan_sequencer.set_output(output_name = output_id, setpoint=setpoint)
+            except Exception as e:
+                raise e
+        except Exception as e:
+            # Catch any other errors
+            raise e
+        finally:
+            # Release the controller
+            self.busy=False

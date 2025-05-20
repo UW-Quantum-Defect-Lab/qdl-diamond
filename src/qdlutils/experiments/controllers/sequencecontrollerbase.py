@@ -280,7 +280,7 @@ class SequenceControllerBase:
         self.busy=True
         # Attempt to set the value of the specified output to the set point
         try:
-            self.sequencer.outputs[output_id].set(setpoint=setpoint)
+            self.sequencer.set_output(output_name = output_id, setpoint=setpoint)
         except Exception as e:
             raise e
         # Release the controller
