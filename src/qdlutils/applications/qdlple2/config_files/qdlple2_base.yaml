@@ -35,25 +35,25 @@ qdlple2:
       import_path: qdlutils.hardware.nidaq.synchronous.nidaqsequenceroutputgroup
       class_name : NidaqSequencerAOVoltageGroup
       channels:
-        - scan_laser
+        - scan_laser_voltage
       
     scan_ci_rate:
       import_path: qdlutils.hardware.nidaq.synchronous.nidaqsequencerinputgroup
       class_name : NidaqSequencerCiEdgeRateGroup
       channels:
-        - counter
+        - counter_rate
 
     scan_ai_voltage:
       import_path: qdlutils.hardware.nidaq.synchronous.nidaqsequencerinputgroup
       class_name : NidaqSequencerAIVoltageGroup
       channels:
-        - photodiode
+        - photodiode_voltage
 
     repump_ao_voltage:
       import_path: qdlutils.hardware.nidaq.synchronous.nidaqsequenceroutputgroup
       class_name : NidaqSequencerAOVoltageGroup
       channels:
-        - scan_laser
+        - repump_laser_voltage
         
   Channels:
 
@@ -61,27 +61,27 @@ qdlple2:
     # the channels refer to blocks here which are utilized to initialize the channel. Each type of
     # hardware group expects certain properties so take care to include everything that is required.
 
-    scan_laser:
+    scan_laser_voltage:
       device: Dev1
       channel: ao0
       min: -3
       max: 5
       process_instructions: #If blank default behavior of the controller will be assumed
 
-    repump_laser:
+    repump_laser_voltage:
       device: Dev2
       channel: ao0
       min: -5
       max: 5
       process_instructions:
 
-    counter:
+    counter_rate:
       device: Dev1
       channel: ctr2
       terminal: PFI0
       process_instructions: average # Average the count rate over a single pixel
 
-    photodiode:
+    photodiode_voltage:
       device: Dev1
       channel: ai1
       process_instructions:

@@ -66,6 +66,9 @@ class LauncherApplication:
         # Store the GUI input values
         self.gui_input = None
 
+        # Names of scan input channels
+        self.scan_input_channels = []
+
         # Load the YAML file
         self.configure_from_yaml(yaml_filename=default_config_filename)
 
@@ -166,6 +169,10 @@ class LauncherApplication:
 
         # Create the controller
         self.application_controller = constructor(**ctrl_params)
+
+        # Save the scan input channel names to the application
+        for group in scan_inputs:
+            self.scan_input_channels += group.keys()
         
     def _load_io_groups(
             self,
@@ -483,7 +490,7 @@ class ScanApplication:
             ds.attrs['application'] = 'qdlutils.qdlscan.ImageScanApplication'
             ds.attrs['qdlutils_version'] = qdlutils.__version__
             ds.attrs['scan_id'] = self.id
-            ds.attrs['timestamp'] = self.timestamp.strftime("%Y-%m-%d %H:%M:%S")
+            ds.attrs['timestamp'] = self.timestamp.strftime('%Y-%m-%d %H:%M:%S')
             ds.attrs['original_name'] = file_name
 
             # Save the scan settings

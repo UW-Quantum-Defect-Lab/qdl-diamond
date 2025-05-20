@@ -1,5 +1,6 @@
 import logging
 
+import numpy as np
 import matplotlib
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
 import matplotlib.pyplot as plt
@@ -149,12 +150,22 @@ class ScanApplicationView:
         self.application = application
         self.settings_dict = settings_dict
 
+        # Create the GUI elements
         self.data_viewport = ImageDataViewport(window=window)
         self.control_panel = ImageFigureControlPanel(window=window, settings_dict=settings_dict)
 
-        # Normalization for the figure
+        # Figure properties
         self.norm_min = None
         self.norm_max = None
+        # If data viewport should plot the lines (True) or an image (False)
+        self.plot_lines = False
+        # If the data viewport should average the lines
+        self.average_lines = False
+        # Names of all input sources to plot
+        self.plot_options = application.application_controller.scan_input_channels
+        # Name of data channels to plot, defaults to the counter vs scan laser
+        self.data_to_plot_x = application.application_controller.scan_laser_id
+        self.data_to_plot_y = application.application_controller.counter_id
 
         # tkinter right click menu
         self.rclick_menu = tk.Menu(window, tearoff = 0) 
@@ -168,35 +179,108 @@ class ScanApplicationView:
         # Create a new axis
         self.data_viewport.ax = self.data_viewport.fig.add_subplot(111)
 
-        pixel_width = self.application.range / self.application.n_pixels
-        extent = [self.application.min_position_1 - pixel_width/2, 
-                  self.application.max_position_1 + pixel_width/2,
-                  self.application.min_position_2 - pixel_width/2,
-                  self.application.max_position_2 + pixel_width/2]
-        
-        # Plot the frame
-        img = self.data_viewport.ax.imshow(self.application.data_z,
-                                           extent = extent,
-                                           cmap = self.application.cmap,
-                                           origin = 'lower',
-                                           aspect = 'equal',
-                                           interpolation = 'none')
+        # Plot either the image or the lines depending on the current configuration
+        if self.plot_lines:
+            self._draw_lines()
+        else:
+            self._draw_image()
+
+        self.data_viewport.canvas.draw()
+
+    def _draw_image(self):
+        '''
+        Draws the data as an image
+        '''
+        # Matplotlib's imshow maps all pixels to the same size. However we want to show both the up
+        # and down sweep at the same time which have different scales in voltage. To work around 
+        # this, we pick the axis scale from 0 -> 1 on the upscan and 1 -> y_max on the down scan.
+        # Proportionality requires
+        y_max = 1 + self.application.scan_parameters['n_pixels_down']/self.application.scan_parameters['n_pixels_up'] 
+
+        # Compute the extent of the image
+        data_to_plot = self.application.data[self.data_to_plot_y]
+        n_completed_scans = len(data_to_plot)
+        extent = [0.5, 
+                  n_completed_scans+0.5,
+                  0,
+                  y_max]
+        # Plot the data
+        img = self.data_viewport.ax.imshow(
+            data_to_plot,
+            extent = extent,
+            cmap = self.application.cmap,
+            origin = 'lower',
+            aspect = 'equal',
+            interpolation = 'none'
+        )
+        # Set the x ticks
+        if n_completed_scans < 11:
+            # Set ticks on all integer values
+            self.data_viewport.ax.set_xticks( np.arange(1,n_completed_scans+1,1) )
+        else:
+            # Set on every 5 if more than 10 scans long
+            self.data_viewport.ax.set_xticks( np.arange(5,n_completed_scans+1,5) )
+        # Set the y ticks
+        # Place ticks on the upsweep only
+        self.data_viewport.ax.set_yticks(
+            [0,0.25,0.5,0.75,1.0],
+            np.linspace(self.application.scan_parameters['min'], 
+                        self.application.scan_parameters['max'],
+                        num = 5)
+        )
+        # Add the color bar
         self.data_viewport.cbar = self.data_viewport.fig.colorbar(img, ax=self.data_viewport.ax)
-
-        self.data_viewport.ax.set_xlabel(f'{self.application.axis_1} position (μm)', fontsize=14)
-        self.data_viewport.ax.set_ylabel(f'{self.application.axis_2} position (μm)', fontsize=14)
-        self.data_viewport.cbar.ax.set_ylabel('Intensity (cts/s)', fontsize=14, rotation=270, labelpad=15)
+        # Add the labels
+        self.data_viewport.ax.set_xlabel('Scan number', fontsize=14)
+        self.data_viewport.ax.set_ylabel(self.data_to_plot_x, fontsize=14)
+        self.data_viewport.cbar.ax.set_ylabel(self.data_to_plot_y, fontsize=14, rotation=270, labelpad=15)
         self.data_viewport.ax.grid(alpha=0.3)
-
         # Normalize the figure if not already normalized
         if (self.norm_min is not None) and (self.norm_max is not None):
             img.set_norm(plt.Normalize(vmin=self.norm_min, vmax=self.norm_max))
 
-        # Plot the current position marker
-        x, y, _ = self.application.application_controller.get_position()
-        self.data_viewport.ax.plot(x,y,'o', fillstyle='none', markeredgecolor='#1864ab', markeredgewidth=2)
+    def _draw_lines(self):
+        '''
+            Draws the data as one or more lines
+        '''
+        # Proportionality requires
+        y_max = 1 + self.application.scan_parameters['n_pixels_down']/self.application.scan_parameters['n_pixels_up'] 
+        unitless_voltages = np.linspace(
+            start=0, 
+            stop=y_max, 
+            num=self.application.scan_parameters['n_pixels_down']+self.application.scan_parameters['n_pixels_up'])
 
-        self.data_viewport.canvas.draw()
+        # Determine the data to plot
+        data_to_plot = self.application.data[self.data_to_plot_y]
+        n_completed_scans = len(data_to_plot)
+        if self.average_lines:
+            data_to_plot = [np.average(data_to_plot, axis=0),]
+        n_lines_to_plot = len(data_to_plot)
+        # Get the color map
+        colors = plt.cm.inferno(np.linspace(0,1,n_lines_to_plot))    
+        # plot the data
+        for line, c in zip(data_to_plot, colors):
+            self.data_viewport.ax.plot(
+                unitless_voltages,
+                line,
+                '-',
+                c = c
+            )    
+        # Set the x limits
+        self.data_viewport.ax.set_xlim(0,y_max)
+        # Place the x ticks on the upsweep only
+        self.data_viewport.ax.set_xticks(
+            [0,0.25,0.5,0.75,1.0],
+            np.linspace(self.application.scan_parameters['min'], 
+                        self.application.scan_parameters['max'],
+                        num = 5)
+        )
+        # Set the y limits
+        self.data_viewport.ax.set_ylim(self.norm_min, self.norm_max)
+        # Add the grid and title
+        self.data_viewport.ax.grid(alpha=0.3)
+        self.data_viewport.ax.set_title(f'Completed {int(n_completed_scans)} scans')
+
 
 
 class ImageDataViewport:
