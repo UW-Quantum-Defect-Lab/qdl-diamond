@@ -1,0 +1,88 @@
+qdlple2:
+  ApplicationController :
+    import_path : qdlutils.applications.qdlple2.application_controller
+    class_name : PLEControllerPulsedRepumpSegmented
+    configure :
+      scan_inputs:
+        - scan_ci_rate    # These point to the hardware groups defined below
+        - scan_ai_voltage
+      scan_outputs: 
+        - scan_ao_voltage
+      scan_clock_device: Dev1
+      scan_clock_channel: ctr0
+      scan_clock_terminal: PFI12
+      repump_outputs:
+        - repump_ao_voltage
+      repump_inputs: [] # Create a list if inputs are utilized for repump
+      repump_clock_device: Dev2
+      repump_clock_channel: ctr0
+      repump_clock_terminal: PFI12
+      scan_laser_id : scan_laser_voltage      # The name of the scan laser as defined below
+      repump_laser_id : repump_laser_voltage  # The name of the repump laser as defined below
+      counter_id : counter_rate               # The name of the counter as defined below
+      repump_laser_setpoints:
+        'off': 0  # Reconfigure these as needed for your repump type
+        'on':  1
+    
+  HardwareGroups:
+
+    # These are the hardware groups which are groups of channels with the same output type. The
+    # application controller refers to these blocks to indicate what the input/output sources are.
+    # In the channels entry, list the names of blocks in the ChannelConfig section to refer to 
+    # specific hardware/channel configurations.
+
+    scan_ao_voltage:
+      import_path: qdlutils.hardware.nidaq.synchronous.nidaqsequenceroutputgroup
+      class_name : NidaqSequencerAOVoltageGroup
+      channels:
+        - scan_laser_voltage
+      
+    scan_ci_rate:
+      import_path: qdlutils.hardware.nidaq.synchronous.nidaqsequencerinputgroup
+      class_name : NidaqSequencerCIEdgeRateGroup
+      channels:
+        - counter_rate
+
+    scan_ai_voltage:
+      import_path: qdlutils.hardware.nidaq.synchronous.nidaqsequencerinputgroup
+      class_name : NidaqSequencerAIVoltageGroup
+      channels:
+        - photodiode_voltage
+
+    repump_ao_voltage:
+      import_path: qdlutils.hardware.nidaq.synchronous.nidaqsequenceroutputgroup
+      class_name : NidaqSequencerAOVoltageGroup
+      channels:
+        - repump_laser_voltage
+        
+  Channels:
+
+    # Define the different hardware channels on the daq here. When loading a specific hardware group
+    # the channels refer to blocks here which are utilized to initialize the channel. Each type of
+    # hardware group expects certain properties so take care to include everything that is required.
+
+    scan_laser_voltage:
+      device: Dev1
+      channel: ao3
+      min: -3
+      max: 5
+      process_instructions: #If blank default behavior of the controller will be assumed
+
+    repump_laser_voltage:
+      device: Dev2
+      channel: ao0
+      min: -5
+      max: 5
+      process_instructions:
+
+    counter_rate:
+      device: Dev1
+      channel: ctr2
+      terminal: PFI0
+      process_instructions: average # Average the count rate over a single pixel
+
+    photodiode_voltage:
+      device: Dev1
+      channel: ai1
+      process_instructions:
+

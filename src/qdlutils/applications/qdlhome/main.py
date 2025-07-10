@@ -3,6 +3,7 @@ import tkinter as tk
 
 import qdlutils.applications.qdlmove.main as qdlmove
 import qdlutils.applications.qdlple.main as qdlple
+import qdlutils.applications.qdlple2.main as qdlple2
 import qdlutils.applications.qdlscan.main as qdlscan
 import qdlutils.applications.qdlscope.main as qdlscope
 
@@ -47,6 +48,7 @@ class HomeApplication:
         # Bind the buttons in the GUI
         self.view.qdlmove_button.bind('<Button>', self.open_qdlmove)
         self.view.qdlple_button.bind('<Button>', self.open_qdlple)
+        self.view.qdlple2_button.bind('<Button>', self.open_qdlple2)
         self.view.qdlscan_button.bind('<Button>', self.open_qdlscan)
         self.view.qdlscope_button.bind('<Button>', self.open_qdlscope)
 
@@ -75,6 +77,13 @@ class HomeApplication:
         try:
             logger.info('Launching qdlple...')
             qdlple.main(is_root_process=False)
+        except Exception as e:
+            logger.warning(f'{e}')
+
+    def open_qdlple2(self, tkinter_event=None) -> None:
+        try:
+            logger.info('Launching qdlple2...')
+            qdlple2.main(is_root_process=False)
         except Exception as e:
             logger.warning(f'{e}')
 
@@ -116,6 +125,9 @@ class HomeApplicationView:
         row += 1
         self.qdlple_button = tk.Button(app_frame, text='qdlple', width=20)
         self.qdlple_button.grid(row=row, column=0, columnspan=2, pady=5)
+        row += 1
+        self.qdlple2_button = tk.Button(app_frame, text='qdlple2', width=20)
+        self.qdlple2_button.grid(row=row, column=0, columnspan=2, pady=5)
         row += 1
         self.qdlscan_button = tk.Button(app_frame, text='qdlscan', width=20) 
         self.qdlscan_button.grid(row=row, column=0, columnspan=2, pady=5)
