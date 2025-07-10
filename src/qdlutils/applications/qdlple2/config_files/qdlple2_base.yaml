@@ -63,7 +63,7 @@ qdlple2:
 
     scan_laser_voltage:
       device: Dev1
-      channel: ao0
+      channel: ao3
       min: -3
       max: 5
       process_instructions: #If blank default behavior of the controller will be assumed

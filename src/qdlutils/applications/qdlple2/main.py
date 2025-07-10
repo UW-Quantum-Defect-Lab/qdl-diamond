@@ -25,10 +25,6 @@ logging.basicConfig()
 CONFIG_PATH = 'qdlutils.applications.qdlple2.config_files'
 DEFAULT_CONFIG_FILE = 'qdlple2_base.yaml'
 
-# Default color map
-DEFAULT_COLOR_MAP = 'gray'
-
-
 class LauncherApplication:
 
     # Type hints
@@ -84,6 +80,9 @@ class LauncherApplication:
         self.view.control_panel.start_button.bind("<Button>", self.start_scan)
         self.view.control_panel.goto_button.bind("<Button>", self.set_laser)
         self.view.control_panel.repump_laser_toggle.config(command=self.toggle_repump_laser)
+
+        # Toggle the repump laser to match default state (off)
+        self.toggle_repump_laser()
 
     def run(self) -> None:
         '''
@@ -399,6 +398,7 @@ class ScanApplication:
     def scan_thread_function(self) -> None:
 
         try:
+            scan_num = 1
             for scan_data in self.application_controller.run_n_sequences(
                     n=self.n_scans,
                     process_method=self.application_controller.process_data,
@@ -419,13 +419,17 @@ class ScanApplication:
                 # Update the figure
                 self.view.update_figure()
 
-                logger.debug('Row complete.')
+                logger.info(f'Scan {scan_num:d} complete.')
+                scan_num += 1
 
-            logger.info('Scan complete.')
+            logger.info('All scans complete.')
 
         except Exception as e:
             raise e
             #logger.error(f'Error in scan thread: {e}')
+
+        finally:
+            self.parent_application.toggle_repump_laser()
 
     def stop_scan(
             self,

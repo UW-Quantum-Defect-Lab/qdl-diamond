@@ -19,7 +19,7 @@ class LauncherApplicationView:
     '''
     def __init__(self, main_window: tk.Tk) -> None:
         main_frame = tk.Frame(main_window)
-        main_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=40, pady=30)
+        main_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=30, pady=30)
 
         self.control_panel = LauncherControlPanel(main_frame)
 
@@ -100,7 +100,7 @@ class LauncherControlPanel:
         self.subpixel_entry.grid(row=row, column=1)
         # Button to enable repump at start of scan?
         row += 1
-        tk.Label(settings_frame, text="Reump time (ms)").grid(row=row, column=0)
+        tk.Label(settings_frame, text="Reump time (s)").grid(row=row, column=0)
         self.repump_entry = tk.Entry(settings_frame, width=10)
         self.repump_entry.insert(0, 0)
         self.repump_entry.grid(row=row, column=1)
@@ -224,9 +224,11 @@ class ScanApplicationView:
         # Place ticks on the upsweep only
         self.data_viewport.ax.set_yticks(
             [0,0.25,0.5,0.75,1.0],
-            np.linspace(self.application.scan_parameters['min'], 
-                        self.application.scan_parameters['max'],
-                        num = 5)
+            np.round(
+                np.linspace(self.application.scan_parameters['min'], 
+                            self.application.scan_parameters['max'],
+                            num = 5),
+                decimals=3)
         )
         # Add the color bar
         self.data_viewport.cbar = self.data_viewport.fig.colorbar(img, ax=self.data_viewport.ax)
@@ -275,14 +277,18 @@ class ScanApplicationView:
         # Place the x ticks on the upsweep only
         self.data_viewport.ax.set_xticks(
             [0,0.25,0.5,0.75,1.0],
-            np.linspace(self.application.scan_parameters['min'], 
-                        self.application.scan_parameters['max'],
-                        num = 5)
+            np.round(
+                np.linspace(self.application.scan_parameters['min'], 
+                            self.application.scan_parameters['max'],
+                            num = 5),
+                decimals=3)
         )
         # Set the y limits
         self.data_viewport.ax.set_ylim(self.norm_min, self.norm_max)
         # Add the grid and title
         self.data_viewport.ax.grid(alpha=0.3)
+        self.data_viewport.ax.set_xlabel(self.data_to_plot_x, fontsize=14)
+        self.data_viewport.ax.set_ylabel(self.data_to_plot_y, fontsize=14)
         self.data_viewport.ax.set_title(f'Completed {int(n_completed_scans)} scans')
 
 
@@ -305,7 +311,7 @@ class ImageDataViewport:
         self.canvas._tkcanvas.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
         self.canvas.draw()
 
-
+# Need to disable the options!!
 class ImageFigureControlPanel:
 
     def __init__(
@@ -348,54 +354,63 @@ class ImageFigureControlPanel:
         tk.Label(settings_frame, text="Min voltage (V)").grid(row=row, column=0)
         self.voltage_start_entry = tk.Entry(settings_frame, width=10)
         self.voltage_start_entry.insert(0, settings_dict['min'])
+        self.voltage_start_entry.config(state='readonly')
         self.voltage_start_entry.grid(row=row, column=1)
         # Max voltage
         row += 1
         tk.Label(settings_frame, text="Max voltage (V)").grid(row=row, column=0)
         self.voltage_end_entry = tk.Entry(settings_frame, width=10)
         self.voltage_end_entry.insert(0, settings_dict['max'])
+        self.voltage_end_entry.config(state='readonly')
         self.voltage_end_entry.grid(row=row, column=1)
         # Number of pixels on upsweep
         row += 1
         tk.Label(settings_frame, text="# of pixels up").grid(row=row, column=0)
         self.num_pixels_up_entry = tk.Entry(settings_frame, width=10)
         self.num_pixels_up_entry.insert(0, settings_dict['n_pixels_up'])
+        self.num_pixels_up_entry.config(state='readonly')
         self.num_pixels_up_entry.grid(row=row, column=1)
         # Number of pixels on downsweep
         row += 1
         tk.Label(settings_frame, text="# of pixels down").grid(row=row, column=0)
         self.num_pixels_down_entry = tk.Entry(settings_frame, width=10)
         self.num_pixels_down_entry.insert(0, settings_dict['n_pixels_down'])
+        self.num_pixels_down_entry.config(state='readonly')
         self.num_pixels_down_entry.grid(row=row, column=1)
         # Number of scans
         row += 1
         tk.Label(settings_frame, text="# of scans").grid(row=row, column=0)
         self.scan_num_entry = tk.Entry(settings_frame, width=10)
         self.scan_num_entry.insert(0, settings_dict['n_scans'])
+        self.scan_num_entry.config(state='readonly')
         self.scan_num_entry.grid(row=row, column=1, padx=10)
         # Time for the upsweep min -> max
         row += 1
         tk.Label(settings_frame, text="Upsweep time (s)").grid(row=row, column=0)
         self.upsweep_time_entry = tk.Entry(settings_frame, width=10)
         self.upsweep_time_entry.insert(0, settings_dict['time_up'])
+        self.upsweep_time_entry.config(state='readonly')
         self.upsweep_time_entry.grid(row=row, column=1)
         # Time for the downsweep max -> min
         row += 1
         tk.Label(settings_frame, text="Downsweep time (s)").grid(row=row, column=0)
         self.downsweep_time_entry = tk.Entry(settings_frame, width=10)
         self.downsweep_time_entry.insert(0, settings_dict['time_down'])
+        self.downsweep_time_entry.config(state='readonly')
         self.downsweep_time_entry.grid(row=row, column=1, padx=10)
         # Subpixel number
         row += 1
         tk.Label(settings_frame, text="# of sub-pixels").grid(row=row, column=0)
         self.subpixel_entry = tk.Entry(settings_frame, width=10)
         self.subpixel_entry.insert(0, settings_dict['n_subpixels'])
+        self.subpixel_entry.config(state='readonly')
         self.subpixel_entry.grid(row=row, column=1)
         # Repump time
         row += 1
-        tk.Label(settings_frame, text="Reump time (ms)").grid(row=row, column=0)
+        tk.Label(settings_frame, text="Reump time (s)").grid(row=row, column=0)
         self.repump_entry = tk.Entry(settings_frame, width=10)
         self.repump_entry.insert(0, settings_dict['time_repump'])
+        self.repump_entry.config(state='readonly')
         self.repump_entry.grid(row=row, column=1)
 
         # ===============================================================================
