@@ -1,13 +1,17 @@
 import logging
 import numpy as np
+import time
 
 from qdlutils.hardware.nidaq.synchronous.nidaqsequencer import NidaqSequencer
 from qdlutils.hardware.nidaq.synchronous.nidaqsequencerinputgroup import NidaqSequencerInputGroup
 from qdlutils.hardware.nidaq.synchronous.nidaqsequenceroutputgroup import NidaqSequencerOutputGroup
 
+from qdlutils.hardware.wavemeters.wavemeters import WavemeterController
+
 from qdlutils.experiments.controllers.sequencecontrollerbase import SequenceControllerBase
 
 from typing import Union, Any, Callable
+from threading import Thread
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -689,3 +693,230 @@ class PLEControllerPulsedRepumpSegmented(SequenceControllerBase):
         finally:
             # Release the controller
             self.busy=False
+
+
+class PLEControllerPulsedRepumpSegmentedWithWavemeter(PLEControllerPulsedRepumpSegmented):
+
+    def __init__(
+            self,
+            scan_inputs: dict[str,NidaqSequencerInputGroup],
+            scan_outputs: dict[str,NidaqSequencerOutputGroup],
+            repump_inputs: dict[str,NidaqSequencerInputGroup],
+            repump_outputs: dict[str,NidaqSequencerOutputGroup],
+            scan_laser_id: str,
+            repump_laser_id: str,
+            counter_id: str,
+            nondaq_devices: list[str],
+            wavemeter: WavemeterController,
+            repump_laser_setpoints: dict = {'on': 1, 'off':0},
+            scan_clock_device: str = 'Dev1',
+            scan_clock_channel: str = 'port0',
+            scan_clock_terminal: str = 'PFI12',
+            repump_clock_device: str = 'Dev1',
+            repump_clock_channel: str = 'port0',
+            repump_clock_terminal: str = 'PFI12',
+            nondaq_query_delay: float = 0.1,
+            process_instructions: dict = {}
+    ):
+        super().__init__(
+            scan_inputs = scan_inputs,
+            scan_outputs = scan_outputs,
+            repump_inputs = repump_inputs,
+            repump_outputs = repump_outputs,
+            scan_laser_id = scan_laser_id,
+            repump_laser_id = repump_laser_id,
+            counter_id = counter_id,
+            repump_laser_setpoints = repump_laser_setpoints,
+            scan_clock_device = scan_clock_device,
+            scan_clock_channel = scan_clock_channel,
+            scan_clock_terminal = scan_clock_terminal,
+            repump_clock_device = repump_clock_device,
+            repump_clock_channel = repump_clock_channel,
+            repump_clock_terminal = repump_clock_terminal,
+            process_instructions = process_instructions,
+        )
+        # Nondaq device names
+        self.nondaq_devices = nondaq_devices
+        # Wavemeter controller class
+        self.wavemeter = wavemeter
+        # Delay between queries of non-daq hardware
+        self.nondaq_query_delay = nondaq_query_delay
+        # Flag set to False when we want the wavemeter to stop reading in data
+        self.query_wavemeter = False
+        # Data buffers for the wavemeter output timetags and values on the current thread
+        self.last_thread_wavemeter_tags = []
+        self.last_thread_wavemeter_vals = []
+
+        # Size of the buffer for the up/downscan
+        self.upscan_query_buffer_size = None
+        self.downscan_query_buffer_size = None
+
+    def configure_sequence(
+            self,
+            min,
+            max,
+            n_pixels_up,
+            n_pixels_down,
+            n_subpixels,
+            time_up,
+            time_down,
+            time_repump,
+    ):
+        super().configure_sequence(
+                min,
+                max,
+                n_pixels_up,
+                n_pixels_down,
+                n_subpixels,
+                time_up,
+                time_down,
+                time_repump,
+        )
+
+        # Need to additionally determine the buffersize since the number of wavemeter queries varies
+        # depending on random delays in the serial protocol.
+        self.upscan_query_buffer_size = int(time_up / self.nondaq_query_delay) + 1
+        self.downscan_query_buffer_size = int(time_down / self.nondaq_query_delay) + 1
+
+    def _run_sequence(
+            self, 
+            process_method: Callable = None,
+            process_kwargs: dict = {}
+    ) -> Union[dict[str,np.ndarray], Any]:
+        '''
+        Runs the sequence of repump, upscan, and downscan in sequence.
+        In this version includes intermediate steps to track the wavelength position between the
+        start and stop of the up/downsweeps to launch a thread to monitor the wavemeter.
+        '''
+        # Open the wavemeter connection
+        self.wavemeter.open()
+
+        # Run the repump sequence
+        logger.info('Starting repump...')
+        self.repump_sequencer.run_sequence(
+            clock_rate=self.sample_rate_repump,
+            output_data=self.output_data_repump,
+            input_samples=self.input_samples_repump,
+            readout_delays=self.readout_delays,
+            soft_start=self.soft_start,
+            timeout=self.timeout_repump
+        )
+        logger.info('Finished repump.')
+        # Get the data as a dictionary with names appended with repump/upscan/downscan
+        repump_data = {
+            'repump_'+id: val for id,val in self.repump_sequencer.get_data().items()
+        }
+
+        # Create the thread to watch the wavemeter thread and start it.
+        # The thread will immediately start to collect the data from the wavemeter.
+        # The main thread (that runs this function) will continue on to start the upscan sequence
+        wavemeter_thread = Thread(target=self._wavemeter_query_thread_function)
+        wavemeter_thread.start()
+        # Run the repump sequence
+        logger.info('Starting upscan...')
+        self.upscan_sequencer.run_sequence(
+            clock_rate=self.sample_rate_upscan,
+            output_data=self.output_data_upscan,
+            input_samples=self.input_samples_upscan,
+            readout_delays=self.readout_delays,
+            soft_start=self.soft_start,
+            timeout=self.timeout_upscan
+        )
+        # Stop the wavemeter thread by setting the flag
+        self.query_wavemeter = False
+        # Wait for the wavemeter thread to end -- this pauses the main thread until it finishes
+        # This is necessary so we don't start it again before it finishes.
+        wavemeter_thread.join()
+        # Log the upscan completion
+        logger.info('Finished upscan.')
+        # Get the data
+        upscan_data = {
+            'upscan_subpixel_'+id: val for id,val in self.upscan_sequencer.get_data().items()
+        }
+        # Add the wavemeter tags and values to the upscan data dictionary
+        upscan_data['upscan_wavemeter_tags'] = np.pad(
+            np.array(self.last_thread_wavemeter_tags, dtype=np.float32),
+            pad_width=(0,self.upscan_query_buffer_size - len(self.last_thread_wavemeter_tags)),
+            mode='constant',
+            constant_values=np.nan)
+        upscan_data['upscan_wavemeter_vals'] = np.pad(
+            self.last_thread_wavemeter_vals,
+            pad_width=(0,self.upscan_query_buffer_size - len(self.last_thread_wavemeter_vals)),
+            mode='constant',
+            constant_values=np.nan)
+
+        # Create the thread to watch the wavemeter thread and start it again for the down scan.
+        wavemeter_thread = Thread(target=self._wavemeter_query_thread_function)
+        wavemeter_thread.start()
+        # Run the repump sequence
+        logger.info('Starting downscan...')
+        self.downscan_sequencer.run_sequence(
+            clock_rate=self.sample_rate_downscan,
+            output_data=self.output_data_downscan,
+            input_samples=self.input_samples_downscan,
+            readout_delays=self.readout_delays,
+            soft_start=self.soft_start,
+            timeout=self.timeout_downscan
+        )
+        # Stop the wavemeter thread by setting the flag
+        self.query_wavemeter = False
+        # Wait for the wavemeter thread to end -- this pauses the main thread until it finishes
+        # This is necessary so we don't start it again before it finishes.
+        wavemeter_thread.join()
+        # Log the downscan completion
+        logger.info('Finished downscan.')
+        # Get the data
+        downscan_data = {
+            'downscan_subpixel_'+id: val for id,val in self.downscan_sequencer.get_data().items()
+        }
+        # Add the wavemeter tags and values to the downscan data dictionary
+        downscan_data['downscan_wavemeter_tags'] = np.pad(
+            np.array(self.last_thread_wavemeter_tags, dtype=np.float32),
+            pad_width=(0,self.downscan_query_buffer_size - len(self.last_thread_wavemeter_tags)),
+            mode='constant',
+            constant_values=np.nan)
+        downscan_data['downscan_wavemeter_vals'] = np.pad(
+            self.last_thread_wavemeter_vals,
+            pad_width=(0,self.downscan_query_buffer_size - len(self.last_thread_wavemeter_vals)),
+            mode='constant',
+            constant_values=np.nan)
+
+        # Combine
+        data = {**repump_data, **upscan_data, **downscan_data}
+
+        # Close the wavemeter connection, freeing it up for other applications
+        self.wavemeter.close()
+
+        # Return the data dictionary if no process method is provided
+        if process_method is None:
+            return data
+        else:
+            # Otherwise return the processed data
+            return process_method(data, **process_kwargs)
+        
+
+    def _wavemeter_query_thread_function(
+            self
+    ):
+        '''
+        Repeatedly queries the wavemeter for data until the flag is set to false
+        '''
+        # Set the flag to start querying the wavemeter
+        self.query_wavemeter = True
+        # Reset the current scan wavemeter output buffers
+        self.last_thread_wavemeter_tags = []
+        self.last_thread_wavemeter_vals = []
+        # Until the flag is set to false get the data from the wavemeter
+        while self.query_wavemeter:
+            # Try to get the data from the wavemeter
+            try:
+                # Attempt to readout the wavemeter
+                tag, val = self.wavemeter.readout()
+                # Append the results
+                self.last_thread_wavemeter_tags.append(tag)
+                self.last_thread_wavemeter_vals.append(val)
+            # Catch excpetions (i.e. if the wavemeter hasn't gotten a new value to output yet)
+            except Exception as e:
+                logger.debug('Wavemeter readout error:', e)
+            # Wait for the delay (accounts for finite delay between subsequent wavemeter readout)
+            time.sleep(self.nondaq_query_delay)
