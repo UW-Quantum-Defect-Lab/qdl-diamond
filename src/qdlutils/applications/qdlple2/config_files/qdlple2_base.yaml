@@ -1,7 +1,7 @@
 qdlple2:
   ApplicationController :
     import_path : qdlutils.applications.qdlple2.application_controller
-    class_name : PLEControllerPulsedRepumpSegmented
+    class_name : PLEControllerPulsedRepumpSegmentedWithWavemeter
     configure :
       scan_inputs:
         - scan_ci_rate    # These point to the hardware groups defined below
@@ -23,6 +23,9 @@ qdlple2:
       repump_laser_setpoints:
         'off': 0  # Reconfigure these as needed for your repump type
         'on':  1
+      nondaq_devices:
+        - wavemeter
+      nondaq_query_delay: 0.1
     
   HardwareGroups:
 
@@ -48,6 +51,7 @@ qdlple2:
       class_name : NidaqSequencerAIVoltageGroup
       channels:
         - photodiode_voltage
+        - powermeter_voltage
 
     repump_ao_voltage:
       import_path: qdlutils.hardware.nidaq.synchronous.nidaqsequenceroutputgroup
@@ -86,3 +90,22 @@ qdlple2:
       channel: ai1
       process_instructions:
 
+    powermeter_voltage:
+      device: Dev1
+      channel: ai2
+      process_instructions:
+
+  NonDAQDevices:
+
+    # Configuration for non-DAQ devices. Since we won't know ahead of time what these are --- nor
+    # how the software intend to use them --- we use the information here to construct the specific
+    # controllers and pass them as arguments specified by the leading name, e.g. 'wavemeter'
+    wavemeter:
+      import_path: qdlutils.hardware.wavemeters.coherentwavemaster
+      class_name : CoherentWaveMaster
+      config:
+        port: 'COM1'
+        timeout: 1
+        units: 'F'
+        mode: 'C'
+        autocal: False

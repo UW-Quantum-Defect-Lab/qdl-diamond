@@ -147,21 +147,27 @@ class ScanApplicationView:
         self.norm_max = None
         # If data viewport should plot the lines (True) or an image (False)
         self.plot_lines = False
-        # If the data viewport should average the lines
-        self.average_lines = False
         # Names of all input sources to plot
         self.plot_options = application.parent_application.scan_input_channels
         # Name of data channels to plot, defaults to the counter vs scan laser
         self.data_to_plot_x = application.application_controller.scan_laser_id
         self.data_to_plot_y = application.application_controller.counter_id
+        # Plot format
+        self.plot_format = 'Image'
 
         # Create the GUI elements
         self.data_viewport = ImageDataViewport(window=window)
+        # If there are nondaq elements add them to the list
+        if hasattr(self.application.application_controller, 'nondaq_devices'):
+            format_options = self.application.application_controller.nondaq_devices
+        else:
+            format_options = []
         self.control_panel = ImageFigureControlPanel(
             window=window, 
             settings_dict=settings_dict,
             data_options=self.plot_options,
-            data_default=self.data_to_plot_y
+            data_default=self.data_to_plot_y,
+            format_options=format_options
         )
 
         # tkinter right click menu
@@ -177,8 +183,17 @@ class ScanApplicationView:
         self.data_viewport.ax = self.data_viewport.fig.add_subplot(111)
 
         # Plot either the image or the lines depending on the current configuration
-        if self.plot_lines:
-            self._draw_lines()
+        if self.plot_format == 'Image':
+            self._draw_image()
+        elif self.plot_format == 'Scans':
+            self._draw_lines(average_lines=False)
+        elif self.plot_format == 'Average':
+            self._draw_lines(average_lines=True)
+        # !!!
+        # Need to add more options here if you're adding more non-daq devices!
+        # !!!
+        elif self.plot_format == 'wavemeter':
+            self._draw_wavemeter()
         else:
             self._draw_image()
 
@@ -241,7 +256,7 @@ class ScanApplicationView:
         if (self.norm_min is not None) and (self.norm_max is not None):
             img.set_norm(plt.Normalize(vmin=self.norm_min, vmax=self.norm_max))
 
-    def _draw_lines(self):
+    def _draw_lines(self, average_lines=False):
         '''
             Draws the data as one or more lines
         '''
@@ -259,7 +274,7 @@ class ScanApplicationView:
             # If there is no data to plot, make empty array
             data_to_plot = [np.empty(self.application.scan_parameters['n_pixels_down']+self.application.scan_parameters['n_pixels_up']),] 
         n_completed_scans = len(data_to_plot)
-        if self.average_lines:
+        if average_lines:
             data_to_plot = [np.average(data_to_plot, axis=0),]
         n_lines_to_plot = len(data_to_plot)
         # Get the color map
@@ -291,6 +306,31 @@ class ScanApplicationView:
         self.data_viewport.ax.set_ylabel(self.data_to_plot_y, fontsize=14)
         self.data_viewport.ax.set_title(f'Completed {int(n_completed_scans)} scans')
 
+    def _draw_wavemeter(self):
+        if 'upscan_wavemeter_tags' in self.application.data:
+            data_x = self.application.data['upscan_wavemeter_tags']
+            data_y = self.application.data['upscan_wavemeter_vals']
+        else:
+            data_x = np.array([0,])
+            data_y = np.array([0,])
+        
+        n_lines_to_plot = len(data_y) 
+        # Get the color map
+        colors = plt.cm.viridis(np.linspace(0,1,n_lines_to_plot))    
+        # plot the data
+        for x,y,c in zip(data_x, data_y, colors):
+            self.data_viewport.ax.plot(
+                np.array(x)-x[0],
+                np.array(y),
+                '-',
+                c=c
+            )
+        # Add the grid and title
+        self.data_viewport.ax.grid(alpha=0.3)
+        self.data_viewport.ax.set_xlabel('Wavemeter time tag (10 ms, per scan)', fontsize=14)
+        self.data_viewport.ax.set_ylabel('Wavemeter reading (nm or GHz)', fontsize=14)
+        self.data_viewport.ax.set_title(f'Completed {int(n_lines_to_plot)} scans')
+
 
 
 class ImageDataViewport:
@@ -319,7 +359,8 @@ class ImageFigureControlPanel:
             window: tk.Toplevel, 
             settings_dict: dict, 
             data_options: list, 
-            data_default: str
+            data_default: str,
+            format_options: list=[]
     ):
 
         # Parent frame for control panel
@@ -453,18 +494,14 @@ class ImageFigureControlPanel:
         self.selected_option = tk.StringVar(image_settings_buttons_frame)
         self.selected_option.set(data_default)  # Set the default option
         self.selection_dropdown = tk.OptionMenu(image_settings_buttons_frame, self.selected_option, *data_options)
-        self.selection_dropdown.grid(row=row, column=0, columnspan=2, padx=5, pady=5)
-        # Image toggle
+        self.selection_dropdown.grid(row=row, column=0, columnspan=2, padx=5, pady=[5,1])
+        # Data format selection
         row += 1
-        self.plot_scans = tk.IntVar()
-        self.plot_scans_toggle = tk.Checkbutton ( 
-            image_settings_buttons_frame, var=self.plot_scans, text='Plot scans')
-        self.plot_scans_toggle.grid(row=row, column=0, pady=[0,0], columnspan=1)
-        # Integrate toggle
-        self.average_scans = tk.IntVar()
-        self.average_scans_toggle = tk.Checkbutton ( 
-            image_settings_buttons_frame, var=self.average_scans, text='Avg. scans')
-        self.average_scans_toggle.grid(row=row, column=1, pady=[0,0], columnspan=1)
+        self.format_option = tk.StringVar(image_settings_buttons_frame)
+        self.format_option.set('Image')  # Set the default option
+        self.format_dropdown = tk.OptionMenu(image_settings_buttons_frame, self.format_option, *(['Image', 'Scans', 'Average']+format_options))
+        self.format_dropdown.grid(row=row, column=0, columnspan=2, padx=5, pady=5)
+    
 
 
         # ===============================================================================

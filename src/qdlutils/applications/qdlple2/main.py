@@ -122,6 +122,8 @@ class LauncherApplication:
         hardware_config = config[app_name]['HardwareGroups']
         # Get the config of the channels
         channel_config = config[app_name]['Channels']
+        # Get the config of the non-daq devices
+        nondaq_config = config[app_name]['NonDAQDevices']
 
         # First get the application controller class path/name and generate a constructor
         ctrl_import_path = controller_config['import_path']
@@ -150,7 +152,7 @@ class LauncherApplication:
             hardware_config=hardware_config,
             channel_config=channel_config
         )
-        # Load the scan outputs
+        # Load the repump outputs
         repump_outputs, repump_outputs_instr = self._load_io_groups(
             groups_to_load=ctrl_params['repump_outputs'],
             hardware_config=hardware_config,
@@ -165,6 +167,20 @@ class LauncherApplication:
         ctrl_params['process_instructions'] = {
             **scan_inputs_instr, **scan_outputs_instr, **repump_inputs_instr, **repump_outputs_instr
         }
+
+        # Load the non-daq devices
+        nondaq_device_names = ctrl_params['nondaq_devices']
+        for dev in nondaq_device_names:
+            # Get the device config information
+            path = nondaq_config[dev]['import_path']
+            cls = nondaq_config[dev]['class_name']
+            config =nondaq_config[dev]['config']
+            # Import and get the constructor for the class
+            module = importlib.import_module(path)
+            logger.debug(f'Importing {cls}')
+            dev_constructor = getattr(module, cls)
+            # Create the class and add it to the controller parameters dictionary
+            ctrl_params[dev] = dev_constructor(**config)
 
         # Create the controller
         self.application_controller = constructor(**ctrl_params)
@@ -388,8 +404,7 @@ class ScanApplication:
 
         # Bind the variables to update when changed
         self.view.control_panel.selected_option.trace_add(mode='write', callback=self.update_data_to_plot)
-        self.view.control_panel.plot_scans.trace_add(mode='write', callback=self.toggle_plot_lines)
-        self.view.control_panel.average_scans.trace_add(mode='write', callback=self.toggle_average_lines)
+        self.view.control_panel.format_option.trace_add(mode='write', callback=self.update_plot_format)
 
         # Launch the thread
         self.scan_thread = Thread(target=self.scan_thread_function)
@@ -562,24 +577,18 @@ class ScanApplication:
         # Update the figure
         self.view.update_figure()
 
-    def toggle_plot_lines(
+    def update_plot_format(
             self,
             *args: Any
     ) -> None:
-        # Set the internal flag to plot the lines
-        self.view.plot_lines = self.view.control_panel.plot_scans.get()
+        '''
+        The trace call back provides many arguments but we do not utilize them here.
+        '''
+        # Set the data to plot as the selected value
+        self.view.plot_format = self.view.control_panel.format_option.get()
         # Update the figure
         self.view.update_figure()
-        
-    def toggle_average_lines(
-            self,
-            *args: Any
-    ) -> None:
-        # Set the internal flag to average the lines
-        self.view.average_lines = self.view.control_panel.average_scans.get()
-        # Update the figure
-        self.view.update_figure()
-        
+
 
 
 def main(is_root_process=True):
