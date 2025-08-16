@@ -8,21 +8,21 @@ qdlple2:
         - scan_ai_voltage
       scan_outputs: 
         - scan_ao_voltage
+        - scan_do
       scan_clock_device: Dev1
       scan_clock_channel: ctr0
       scan_clock_terminal: PFI12
       repump_outputs:
         - repump_ao_voltage
+        - repump_do
       repump_inputs: [] # Create a list if inputs are utilized for repump
-      repump_clock_device: Dev2
+      repump_clock_device: Dev1
       repump_clock_channel: ctr0
       repump_clock_terminal: PFI12
       scan_laser_id : scan_laser_voltage      # The name of the scan laser as defined below
-      repump_laser_id : repump_laser_voltage  # The name of the repump laser as defined below
+      scan_laser_switch_id: scan_laser_switch # The name of the scan laser switch as defined below
+      repump_laser_id : repump_laser_switch   # The name of the repump laser as defined below
       counter_id : counter_rate               # The name of the counter as defined below
-      repump_laser_setpoints:
-        'off': 0  # Reconfigure these as needed for your repump type
-        'on':  1
       nondaq_devices:
         - wavemeter
       nondaq_query_delay: 0.1
@@ -39,6 +39,13 @@ qdlple2:
       class_name : NidaqSequencerAOVoltageGroup
       channels:
         - scan_laser_voltage
+    
+    scan_do:
+      import_path: qdlutils.hardware.nidaq.synchronous.nidaqsequenceroutputgroup
+      class_name : NidaqSequencerDO32LineGroup
+      channels:
+        - scan_laser_switch
+        - repump_laser_switch
       
     scan_ci_rate:
       import_path: qdlutils.hardware.nidaq.synchronous.nidaqsequencerinputgroup
@@ -57,7 +64,16 @@ qdlple2:
       import_path: qdlutils.hardware.nidaq.synchronous.nidaqsequenceroutputgroup
       class_name : NidaqSequencerAOVoltageGroup
       channels:
-        - repump_laser_voltage
+        - scan_laser_voltage
+
+    repump_do:
+      import_path: qdlutils.hardware.nidaq.synchronous.nidaqsequenceroutputgroup
+      class_name : NidaqSequencerDO32LineGroup
+      channels:
+        - scan_laser_switch
+        - repump_laser_switch
+
+   
         
   Channels:
 
@@ -72,11 +88,16 @@ qdlple2:
       max: 5
       process_instructions: #If blank default behavior of the controller will be assumed
 
-    repump_laser_voltage:
-      device: Dev2
-      channel: ao0
-      min: -5
-      max: 5
+    scan_laser_switch:
+      device: Dev1
+      port: port0
+      line: line1
+      process_instructions:
+
+    repump_laser_switch:
+      device: Dev1
+      port: port0
+      line: line0
       process_instructions:
 
     counter_rate:
@@ -88,12 +109,14 @@ qdlple2:
     photodiode_voltage:
       device: Dev1
       channel: ai1
-      process_instructions:
+      process_instructions: average
 
     powermeter_voltage:
       device: Dev1
       channel: ai2
-      process_instructions:
+      process_instructions: average
+
+    
 
   NonDAQDevices:
 

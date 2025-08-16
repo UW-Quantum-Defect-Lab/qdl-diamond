@@ -80,9 +80,11 @@ class LauncherApplication:
         self.view.control_panel.start_button.bind("<Button>", self.start_scan)
         self.view.control_panel.goto_button.bind("<Button>", self.set_laser)
         self.view.control_panel.repump_laser_toggle.config(command=self.toggle_repump_laser)
+        self.view.control_panel.scan_laser_toggle.config(command=self.toggle_scan_laser)
 
         # Toggle the repump laser to match default state (off)
         self.toggle_repump_laser()
+        self.toggle_scan_laser()
 
     def run(self) -> None:
         '''
@@ -277,7 +279,7 @@ class LauncherApplication:
                 logger.info('Turning repump laser on.')
                 self.application_controller.set_output(
                     output_id=self.application_controller.repump_laser_id, 
-                    setpoint=self.application_controller.repump_laser_setpoints['on']
+                    setpoint=True
                 )
             # Else if the GUI toggle is off and no direct command is given
             # OR if the direct command is False then turn off the laser
@@ -285,10 +287,40 @@ class LauncherApplication:
                 logger.info('Turning repump laser off.')
                 self.application_controller.set_output(
                     output_id=self.application_controller.repump_laser_id, 
-                    setpoint=self.application_controller.repump_laser_setpoints['off']
+                    setpoint=False
                 )
-        except AttributeError as e:
+        except Exception as e:
             logger.error(f'Repump laser could not be toggled: {e}')
+
+    def toggle_scan_laser(
+            self, 
+            set_value: bool = None
+    ) -> None:
+        '''
+        Callback to toggle the scan laser. If called outside of a callback function, the parameter
+        `set_value` determines the toggled state, independent of the GUI.
+        '''
+
+        try: 
+            # If the GUI toggle is on and no direct command `cmd` given
+            # OR if the direct command is True then turn on the laser
+            if (self.view.control_panel.scan_laser_on.get() == 1) or (set_value is True):
+                logger.info('Turning scam laser on.')
+                self.application_controller.set_output(
+                    output_id=self.application_controller.scan_laser_id, 
+                    setpoint=True
+                )
+            # Else if the GUI toggle is off and no direct command is given
+            # OR if the direct command is False then turn off the laser
+            elif (self.view.control_panel.scan_laser_on.get() == 0) or (set_value is False):
+                logger.info('Turning scan laser off.')
+                self.application_controller.set_output(
+                    output_id=self.application_controller.scan_laser_id, 
+                    setpoint=False
+                )
+        except Exception as e:
+            logger.error(f'Repump laser could not be toggled: {e}')
+
 
     def _read_gui(
             self

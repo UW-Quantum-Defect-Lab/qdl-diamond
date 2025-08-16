@@ -455,6 +455,9 @@ class NidaqSequencerDO32LineGroup(NidaqSequencerOutputGroup):
         '''
         # Verifty the setpoint is in range
         self._validate_data(output_name=output_name, data=setpoint)
+        # For setting a single line a boolean is required, however setting multiple lines is most
+        # naturally achieved by passing integers 0,1. Here we convert these to booleans.
+        setpoint = bool(setpoint)
         # Get the device and channel for the output
         config = self.channels_config[output_name]
         # Create a task on the voltage output, write the desired voltage

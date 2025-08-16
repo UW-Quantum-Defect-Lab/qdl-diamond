@@ -351,14 +351,14 @@ class PLEControllerPulsedRepumpSegmented(SequenceControllerBase):
             repump_inputs: dict[str,NidaqSequencerInputGroup],
             repump_outputs: dict[str,NidaqSequencerOutputGroup],
             scan_laser_id: str,
+            scan_laser_switch_id: str,
             repump_laser_id: str,
             counter_id: str,
-            repump_laser_setpoints: dict = {'on': 1, 'off':0},
             scan_clock_device: str = 'Dev1',
-            scan_clock_channel: str = 'port0',
+            scan_clock_channel: str = 'ctr0',
             scan_clock_terminal: str = 'PFI12',
             repump_clock_device: str = 'Dev1',
-            repump_clock_channel: str = 'port0',
+            repump_clock_channel: str = 'ctr0',
             repump_clock_terminal: str = 'PFI12',
             process_instructions: dict = {}
     ):
@@ -421,9 +421,9 @@ class PLEControllerPulsedRepumpSegmented(SequenceControllerBase):
         self.stop = False       # Set to `True` externally if controller should stop
 
         self.scan_laser_id = scan_laser_id
+        self.scan_laser_switch_id = scan_laser_switch_id
         self.repump_laser_id = repump_laser_id
         self.counter_id = counter_id
-        self.repump_laser_setpoints = repump_laser_setpoints
         self.process_instructions = process_instructions
 
     def configure_sequence(
@@ -490,7 +490,7 @@ class PLEControllerPulsedRepumpSegmented(SequenceControllerBase):
             raise ValueError(f'Requested repump time {time_repump} is invalid (must be non-negative).')
 
         # Compute the number of samples
-        self.n_samples_repump = int(time_repump * 1000) + 1 # additional sample to shut off the laser
+        self.n_samples_repump = int(time_repump * 1000)
         self.n_samples_upscan = n_pixels_up * n_subpixels
         self.n_samples_downscan = n_pixels_down * n_subpixels 
         self.n_samples_scan = self.n_samples_upscan + self.n_samples_downscan
@@ -503,28 +503,46 @@ class PLEControllerPulsedRepumpSegmented(SequenceControllerBase):
 
         # Compute output datastream for the scanning laser
         scan_samples_upscan = np.linspace(start=min, stop=max, num=self.n_samples_upscan, endpoint=False)
-        scan_samples_downscans = np.linspace(start=max, stop=min, num=self.n_samples_downscan, endpoint=False)
+        scan_samples_downscan = np.linspace(start=max, stop=min, num=self.n_samples_downscan, endpoint=False)
+        # Compute the output datastream for scanning laser and repump laser switches
+        # Scan laser is on continuously while the repump laser is off
+        scan_laser_switch_samples_upscan = np.ones(self.n_samples_upscan)
+        repump_samples_upscan = np.zeros(self.n_samples_upscan)
+        scan_laser_switch_samples_downscan = np.ones(self.n_samples_downscan)
+        repump_samples_downscan = np.zeros(self.n_samples_downscan)
 
-        # Compute output datstream for the repump laser
-        # Laser is on during the repump step and shut off for the last two steps
-        repump_samples_repump = np.array(
-            [self.repump_laser_setpoints['on'],]*(self.n_samples_repump-1) + [self.repump_laser_setpoints['off'],]*2,
-            dtype=np.float64
-        )
+        # Compute output datstream for the repump sequence
+        # Repump laser is on continuously, add two additional points and turn off repump.
+        # This is necessary so that there is at least 2 samples so that the repump sequence can
+        # execute without error. For some reason `nidaqmx` throws confusing errors if you try to
+        # perform a stream write with only one sample... This just adds about 2 ms of delay...
+        repump_samples_repump = np.ones(self.n_samples_repump+2, dtype=np.uint32)
+        repump_samples_repump[-1] = 0
+        # Scan laser is also on continuously (can turn off but no point in doing so)
+        scan_laser_switch_samples_repump = np.ones(self.n_samples_repump+2, dtype=np.uint32)
+        # Scan laser voltage is set to the start value
+        scan_laser_samples_repump = np.ones(self.n_samples_repump+2) * min
 
         # Save the output datastreams
         self.output_data_repump = {
             self.repump_laser_id: repump_samples_repump,
+            self.scan_laser_switch_id: scan_laser_switch_samples_repump,
+            self.scan_laser_id: scan_laser_samples_repump
         }
         self.output_data_upscan = {
+            self.repump_laser_id: repump_samples_upscan,
+            self.scan_laser_switch_id: scan_laser_switch_samples_upscan,
             self.scan_laser_id: scan_samples_upscan,
         }
         self.output_data_downscan = {
-            self.scan_laser_id: scan_samples_downscans,
+            self.repump_laser_id: repump_samples_downscan,
+            self.scan_laser_switch_id: scan_laser_switch_samples_downscan,
+            self.scan_laser_id: scan_samples_downscan,
         }
         # Perform a soft start in general
         self.soft_start = {
             self.scan_laser_id: True,
+            self.scan_laser_switch_id: True,
             self.repump_laser_id: True
         }
         # Inputs are all treated the same and so we assign the same values for `n_samples` and
@@ -704,16 +722,16 @@ class PLEControllerPulsedRepumpSegmentedWithWavemeter(PLEControllerPulsedRepumpS
             repump_inputs: dict[str,NidaqSequencerInputGroup],
             repump_outputs: dict[str,NidaqSequencerOutputGroup],
             scan_laser_id: str,
+            scan_laser_switch_id: str,
             repump_laser_id: str,
             counter_id: str,
             nondaq_devices: list[str],
             wavemeter: WavemeterController,
-            repump_laser_setpoints: dict = {'on': 1, 'off':0},
             scan_clock_device: str = 'Dev1',
-            scan_clock_channel: str = 'port0',
+            scan_clock_channel: str = 'ctr0',
             scan_clock_terminal: str = 'PFI12',
             repump_clock_device: str = 'Dev1',
-            repump_clock_channel: str = 'port0',
+            repump_clock_channel: str = 'ctr0',
             repump_clock_terminal: str = 'PFI12',
             nondaq_query_delay: float = 0.1,
             process_instructions: dict = {}
@@ -724,9 +742,9 @@ class PLEControllerPulsedRepumpSegmentedWithWavemeter(PLEControllerPulsedRepumpS
             repump_inputs = repump_inputs,
             repump_outputs = repump_outputs,
             scan_laser_id = scan_laser_id,
+            scan_laser_switch_id = scan_laser_switch_id,
             repump_laser_id = repump_laser_id,
             counter_id = counter_id,
-            repump_laser_setpoints = repump_laser_setpoints,
             scan_clock_device = scan_clock_device,
             scan_clock_channel = scan_clock_channel,
             scan_clock_terminal = scan_clock_terminal,

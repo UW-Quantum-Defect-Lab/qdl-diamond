@@ -121,13 +121,20 @@ class LauncherControlPanel:
         self.laser_setpoint = tk.Entry(control_frame, width=10)
         self.laser_setpoint.insert(0, 1)
         self.laser_setpoint.grid(row=row, column=1, padx=10)
-        # Getter for the voltage (based off of the latest set value)
+        # Toggle for the repump laser
         row += 1
         self.repump_laser_on = tk.IntVar()
         self.repump_laser_toggle_label = tk.Label(control_frame, text='Toggle repump laser')
         self.repump_laser_toggle_label.grid(row=row, column=0, pady=[5,0])
         self.repump_laser_toggle = tk.Checkbutton ( control_frame, var=self.repump_laser_on)
         self.repump_laser_toggle.grid(row=row, column=1, pady=[5,0])
+        # Toggle for the scan laser
+        row += 1
+        self.scan_laser_on = tk.IntVar()
+        self.scan_laser_toggle_label = tk.Label(control_frame, text='Toggle scan laser')
+        self.scan_laser_toggle_label.grid(row=row, column=0, pady=[0,0])
+        self.scan_laser_toggle = tk.Checkbutton ( control_frame, var=self.scan_laser_on)
+        self.scan_laser_toggle.grid(row=row, column=1, pady=[0,0])
 
 
 
