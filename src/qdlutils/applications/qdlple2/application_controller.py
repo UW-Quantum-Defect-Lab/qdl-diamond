@@ -517,7 +517,7 @@ class PLEControllerPulsedRepumpSegmented(SequenceControllerBase):
         # execute without error. For some reason `nidaqmx` throws confusing errors if you try to
         # perform a stream write with only one sample... This just adds about 2 ms of delay...
         repump_samples_repump = np.ones(self.n_samples_repump+2, dtype=np.uint32)
-        repump_samples_repump[-1] = 0
+        repump_samples_repump[-2:] = 0
         # Scan laser is also on continuously (can turn off but no point in doing so)
         scan_laser_switch_samples_repump = np.ones(self.n_samples_repump+2, dtype=np.uint32)
         # Scan laser voltage is set to the start value
