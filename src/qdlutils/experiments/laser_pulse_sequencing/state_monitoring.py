@@ -1,8 +1,10 @@
 import logging
+import os
 import numpy as np
 import matplotlib.pyplot as plt
 import time
 import h5py
+import nidaqmx
 
 from qdlutils.hardware.nidaq.synchronous.nidaqsequencerinputgroup import (
     NidaqSequencerCIEdgeGroup,
@@ -71,6 +73,11 @@ class SimpleStateMonitoringExperiment(SequenceControllerBase):
         self.repump_id = repump_id
         self.probe_id = probe_id
         self.counter_id =counter_id
+        # Save the configurations
+        self.repump_do_config = repump_do_config
+        self.probe_do_config = probe_do_config
+        self.probe_ao_config = probe_ao_config
+        self.counter_ci_config = counter_ci_config
         # Wavemeter controller class for interfacing with the wavemeter
         self.wavemeter_controller = wavemeter_controller
 
@@ -80,6 +87,11 @@ class SimpleStateMonitoringExperiment(SequenceControllerBase):
         self.sequence_settings = None   # Dictionary of the settings used in the sequence
         self.data_batches = []          # Data array. Each element in list is a batch, each batch is
                                         # a 2-d array with rows corresponding to a single subsequence.
+        self.batch_probe_targets = []   # List of probe wavemeter reading targets for each batch
+        # Data vectors
+        self.single_sequence_time = None
+        self.single_sequence_repump_data = None
+        self.single_sequence_probe_data = None
     
         # Generate the inputs for the measurement sequence
         sequence_inputs = {
@@ -124,6 +136,77 @@ class SimpleStateMonitoringExperiment(SequenceControllerBase):
         self.set_output(output_id=self.probe_id+'_freq', setpoint=setpoint)
         self.probe_voltage = setpoint
 
+    def set_probe_voltage_smooth(
+            self,
+            setpoint: float,
+            max_voltage_step: float = 0.01,
+            move_speed: float = 4,
+            move_time: float = None,
+    ):
+        '''
+        Sets the value of the probe voltage to `setpoint` by continuously scanning the voltage from
+        the current position. Then records the setpoint.
+
+        We need to program this at the hardware level since we don't want the other components of
+        the sequencer to be utilized.
+
+        Parameters
+        ----------
+        setpoint: float
+            The voltage to set to.
+        max_voltage_step: float = 0.1
+            The maximum change in voltage per step.
+        move_speed: float = 1
+            The speed to move at in volts/second.
+        move_time: float = None
+            If provided, overwrites the move speed such that the entire move occurs in `move_time`
+            seconds.
+        '''
+        # Validate the data
+        self.sequencer.validate_output_data(output_name=self.probe_id+'_freq', data=setpoint)
+        # If already at setpoint exit
+        if self.probe_voltage == setpoint:
+            print('Already at setpoint.')
+            return None
+
+        # Get the number of samples to scan, should be at least 2 steps
+        n_samples = max(1, int(np.abs(self.probe_voltage - setpoint) / max_voltage_step))
+        # Get the voltages to scan over
+        voltages = np.linspace(self.probe_voltage, setpoint, n_samples, endpoint=True)
+        # If the move time is provided, set the rate accordingly
+        if move_time is not None:
+            sample_rate = n_samples / move_time
+        # else the move speed is utilized
+        else:
+            # Determine the voltage spacing
+            dvoltage = np.abs(voltages[1] - voltages[0])
+            # Determine the sample rate from the move speed
+            sample_rate = move_speed / dvoltage
+        # Validate the data again
+        self.sequencer.validate_output_data(output_name=self.probe_id+'_freq', data=voltages)
+
+        # Create an internally timed task to perform the move
+        with nidaqmx.Task() as task:
+
+            # Create the AO voltage channel and configure the timing
+            task.ao_channels.add_ao_voltage_chan(self.probe_ao_config['device']+'/'+self.probe_ao_config['channel'])
+            task.timing.cfg_samp_clk_timing(
+                sample_rate,
+                sample_mode=nidaqmx.constants.AcquisitionType.FINITE,
+                samps_per_chan=n_samples
+            )
+            # Write the data to the AO channel
+            task.write(voltages)
+            # Start the AO task
+            task.start()
+            # Wait until done
+            task.wait_until_done(timeout=n_samples*sample_rate + 1) # 1 second buffer
+            # Stop the task
+            task.stop()
+
+        # Update the current position
+        self.probe_voltage = setpoint
+
     def set_probe_target(
             self,
             val: float,
@@ -150,7 +233,10 @@ class SimpleStateMonitoringExperiment(SequenceControllerBase):
         '''
         Configures and performs a single probe laser sweep to assist in locating the resonance
         features of interest.
-        For simplicity the sweep scans from the `voltage_min` to `voltage_max` only.
+        For simplicity the sweep scans from the `voltage_min` to `voltage_max` only, measuring the
+        frequency at the start and end of the scan via the wavemeter.
+        After the scan the laser is smoothly returned to the start value (default) or the frequency
+        of an estimated peak/dip feature depending on the `optimize` argument value.
 
         Parameters
         ----------
@@ -207,6 +293,9 @@ class SimpleStateMonitoringExperiment(SequenceControllerBase):
 
         print('Starting probe scan...')
 
+        # Set the laser to the start position
+        self.set_probe_voltage_smooth(setpoint=voltage_min)
+
         # Repump (doing a software timed repump since it doesn't really matter)
         if repump_time > 0:
             print(f'Starting repump for {repump_time:.3f} s...')
@@ -231,31 +320,36 @@ class SimpleStateMonitoringExperiment(SequenceControllerBase):
         freqs = np.linspace(probe_value_start,probe_value_end,n_pixels)
         # Close the wavemeter
         self.wavemeter_controller.close()
+        # Record the final position
+        self.probe_voltage = voltage_max
         print('Scan completed.')
 
         # Set the probe voltage depending on the optimization
         if optimize == 'max':
-            # Looking for a peak so optimize on the center of mass
-            center_freq = np.sum(freqs * data) / np.sum(data)
-            center_voltage = np.sum(probe_freq_pixels * data) / np.sum(data)
+            # Get the max value in the scan range and center the laser on it
+            max_idx = np.argmax(data)
+            center_freq = freqs[max_idx]
+            center_voltage = probe_freq_pixels[max_idx]
             # Set the voltage to the center value
-            self.set_probe_voltage(center_voltage)
+            self.set_probe_voltage_smooth(center_voltage)
             # Set the target frequency reading to the center value
             self.set_probe_target(center_freq)
             # Report
-            print(f'Setting probe to center of mass at {center_voltage:.2f} V and wavemeter reading {center_freq:.4f}')
+            print(f'Setting probe to the max signal at {center_voltage:.2f} V and wavemeter reading {center_freq:.4f}')
         elif optimize == 'min':
-            # Looking for a dip so optimize on the inverse center of mass
-            center_freq = np.sum(freqs / data) / np.sum(1/data)
-            center_voltage = np.sum(probe_freq_pixels / data) / np.sum(1/data)
+            # Get the max value in the scan range and center the laser on it
+            min_idx = np.argmin(data)
+            center_freq = freqs[min_idx]
+            center_voltage = probe_freq_pixels[min_idx]
             # Set the voltage to the center value
-            self.set_probe_voltage(center_voltage)
+            self.set_probe_voltage_smooth(center_voltage)
             # Set the target frequency reading to the center value
             self.set_probe_target(center_freq)
-            print(f'Setting probe to center of inverse mass at {center_voltage:.2f} V and wavemeter reading {center_freq:.4f}')
+            # Report
+            print(f'Setting probe to the min signal at {center_voltage:.2f} V and wavemeter reading {center_freq:.4f}')
         else:
             # No optimization so return to the beginning
-            self.set_probe_voltage(voltage_min)
+            self.set_probe_voltage_smooth(voltage_min)
             print(f'Setting probe to start voltage {voltage_min:.3f} V.')
 
         # Close both the repump and probe switches
@@ -347,12 +441,17 @@ class SimpleStateMonitoringExperiment(SequenceControllerBase):
                     # Close the wavemeter
                     self.wavemeter_controller.close()
                     return None
+                # Else if in tollerance then do not adjust and continue
+                elif abs(e) < tol:
+                    print('Laser in tollerance')
+                    # Wait for the query period before next attempt
+                    time.sleep(query_period)
                 # Otherwise continue...
                 else:
                     # Compute the step size
                     dvoltage = current_penalty * error / freq_volt_grad
                     # Adjust the voltage
-                    self.set_probe_voltage(self.probe_voltage+dvoltage)
+                    self.set_probe_voltage_smooth(self.probe_voltage+dvoltage)
                     # Increase the penalty
                     current_penalty = current_penalty * penalty
                     # Wait for the query period before next attempt
@@ -377,6 +476,7 @@ class SimpleStateMonitoringExperiment(SequenceControllerBase):
             clock_rate: float=100000,
             scan_kwargs: dict = None,
             stabilization_kwargs: dict = None,
+            save_fname: str = None
     ):
         '''
         Runs `n_batches` of the state monitoring-pulse sequence with each batch containing
@@ -409,6 +509,9 @@ class SimpleStateMonitoringExperiment(SequenceControllerBase):
         stabilization_kwargs: dict = None
             Dictionary of keyword argument and value pairs for the stabilization method. If None the
             default values are used.
+        save_fname: str = None
+            If provided, saves the data from this run to the provided file name (adding a '.hdf5'
+            extension). May include the directory.
         '''
 
         # Get the times associated to the relevant points in the sequence in terms of clock cycles
@@ -418,11 +521,11 @@ class SimpleStateMonitoringExperiment(SequenceControllerBase):
         idx4 = idx3 + int(end_delay * clock_rate)       # Number of samples per individual sequence
 
         # Generate data for a single sequence
-        single_sequence_time = np.arange(idx4) / clock_rate
-        single_sequence_repump_data = np.zeros(idx4, dtype=np.int32)
-        single_sequence_repump_data[0:idx1] = 1
-        single_sequence_probe_data = np.zeros(idx4, dtype=np.int32)
-        single_sequence_probe_data[idx2:idx3] = 1
+        self.single_sequence_time = np.arange(idx4) / clock_rate
+        self.single_sequence_repump_data = np.zeros(idx4, dtype=np.int32)
+        self.single_sequence_repump_data[0:idx1] = 1
+        self.single_sequence_probe_data = np.zeros(idx4, dtype=np.int32)
+        self.single_sequence_probe_data[idx2:idx3] = 1
 
         # Save the sequence parameters
         self.sequence_settings = {
@@ -433,8 +536,6 @@ class SimpleStateMonitoringExperiment(SequenceControllerBase):
             'probe_time': probe_time,
             'end_delay': end_delay,
             'clock_rate': clock_rate,
-            'scan_kwargs': scan_kwargs,
-            'stabilization_kwargs': stabilization_kwargs,
             'single_sequence_samples': idx4
         }
 
@@ -442,8 +543,8 @@ class SimpleStateMonitoringExperiment(SequenceControllerBase):
         n_samples = n_repetitions * idx4
         self.clock_rate = clock_rate
         self.output_data = {
-            self.repump_id        : np.tile(single_sequence_repump_data, n_repetitions), # Repeats sequence
-            self.probe_id         : np.tile(single_sequence_probe_data, n_repetitions),
+            self.repump_id        : np.tile(self.single_sequence_repump_data, n_repetitions), # Repeats sequence
+            self.probe_id         : np.tile(self.single_sequence_probe_data, n_repetitions),
             self.probe_id+'_freq' : None # Add this after stabiliztaion
         }
         self.input_samples = {
@@ -454,6 +555,9 @@ class SimpleStateMonitoringExperiment(SequenceControllerBase):
         self.timeout = n_samples / clock_rate + 1    # 1 extra second
 
         print('Starting the sequence...')
+        # Clear old data
+        self.data_batches = []
+        self.batch_probe_targets = []
 
         # Configure the plot for live display
         fig, ax = plt.subplots(1,1,figsize=(5,4))
@@ -464,7 +568,7 @@ class SimpleStateMonitoringExperiment(SequenceControllerBase):
 
         # Loop for the specified number of batches
         for k in range(n_batches):
-            # Run a scan to start and determine the target frequency
+            # Run a scan to start and determine the target frequency if desired
             if scan_kwargs is not None:
                 # Run the single scan
                 self.single_probe_scan(**scan_kwargs)
@@ -472,8 +576,8 @@ class SimpleStateMonitoringExperiment(SequenceControllerBase):
                 n_samples = n_repetitions * idx4
                 self.clock_rate = clock_rate
                 self.output_data = {
-                    self.repump_id        : np.tile(single_sequence_repump_data, n_repetitions), # Repeats sequence
-                    self.probe_id         : np.tile(single_sequence_probe_data, n_repetitions),
+                    self.repump_id        : np.tile(self.single_sequence_repump_data, n_repetitions), # Repeats sequence
+                    self.probe_id         : np.tile(self.single_sequence_probe_data, n_repetitions),
                     self.probe_id+'_freq' : None # Add this after stabiliztaion
                 }
                 self.input_samples = {
@@ -487,6 +591,8 @@ class SimpleStateMonitoringExperiment(SequenceControllerBase):
             if stabilization_kwargs is None:
                 stabilization_kwargs = {}
             self.stabilize(**stabilization_kwargs)
+            # Record the probe target value
+            self.batch_probe_targets.append(self.probe_target)
             # Write the stabilized voltage to the output
             self.output_data[self.probe_id+'_freq'] = np.ones(n_samples) * self.probe_voltage
             # Run a single sequence
@@ -497,9 +603,12 @@ class SimpleStateMonitoringExperiment(SequenceControllerBase):
             averaged_data = np.average(data, axis=0)
 
             # Update the plot
-            ax.plot(single_sequence_time,averaged_data)
+            ax.plot(self.single_sequence_time,averaged_data)
             ax.set_title(f'Completed batches: {k+1}')
             display.display(fig)
+
+        if save_fname is not None:
+            self.save(filename=save_fname)
 
         print('Finished.')
 
@@ -545,5 +654,34 @@ class SimpleStateMonitoringExperiment(SequenceControllerBase):
         '''
         Saves the current sequence settings and data to an hdf5 file with the given `filename`.
         '''
+        # Add the extension
+        fname = filename+'.hdf5'
 
+        # Check if a file with the same name already exists
+        if os.path.isfile(fname):
+            print(f'File `{fname}` already exists, adding duplicate flag.')
+            fname = filename + '-1.hdf5'
+            # If this duplicate already exists then it gets overwritten!
 
+        # Save as hdf5
+        print(f'Saving data as `{fname}`.')
+        with h5py.File(fname, 'w') as f:
+
+            # Save the scan settings
+            # Run through the scan parameters dictionary saving data 
+            ds = f.create_dataset('sequence_settings', data=np.array([]))
+            for param, val in self.sequence_settings.items():
+                ds.attrs[param] =  val
+
+            # Save the data for a single sequence
+            f.create_dataset('single_sequence_time', data=self.single_sequence_time)
+            f.create_dataset('single_sequence_repump', data=self.single_sequence_repump_data)
+            f.create_dataset('single_sequence_probe', data=self.single_sequence_probe_data)
+
+            # Save the raw data of the repeated super sequence. A three dimensional array with the
+            # first index being each batch, second being each repetition, and third being each
+            # sample. Using float32 instead of default 64 to reduce the dataset size.
+            f.create_dataset('samples', data=np.array(self.data_batches, dtype=np.float32))
+            f.create_dataset('target_freqs', data=np.array(self.batch_probe_targets))
+
+        print('File saved.')
