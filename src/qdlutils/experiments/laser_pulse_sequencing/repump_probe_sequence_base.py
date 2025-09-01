@@ -17,49 +17,27 @@ from qdlutils.hardware.nidaq.synchronous.nidaqsequenceroutputgroup import (
 from qdlutils.experiments.controllers.sequencecontrollerbase import SequenceControllerBase
 from qdlutils.hardware.wavemeters.wavemeters import WavemeterController
 
+from scipy.optimize import curve_fit
+
 from IPython import display
 from typing import Union, Any, Callable
-
-
-from qdlutils.experiments.laser_pulse_sequencing.repump_probe_sequence_base import (
-    RepumpProbeSequenceBase
-)
-
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
-class SimpleStateMonitoringExperiment(SequenceControllerBase):
+class RepumpProbeSequenceBase(SequenceControllerBase):
 
     '''
-    This class implements a simple state monitoring experimental sequence. The experimental protocol
-    is comprised of two lasers "repump" and "probe". The repump is periodically pulsed to pump the
-    system into a given state while the probe monitors the state. Graphically:
+    This class implements the basic features for pulse sequence experiments involving a repump laser
+    and probe laser.
 
-    ```
-        repump    __|=======|___________________________________
+    The repump laser does not have any frequency control but is turned on/off via a TTL digital
+    output signal.
 
-        probe     ______________|===========================|___ 
+    The probe laser is also turned on/off via a TTL digital output signal and has frequency control
+    via a analog voltage output.
 
-                    |       |   |                           |   |
-                    t=0     t1  t2                          t3  t4
-
-        t1      = Repump time
-        t2 - t1 = Delay between repump and probe start
-        t3 - t2 = Probe time
-        t4 - t3 = Delay betwen probe and start of next repetition
-    ```
-
-    The repump laser is assumed to be some static off resonant laser with pulse control via a 
-    digital output.
-    The probe laser is assumed to be tunable with some analog output voltage and have pulse control
-    via a digital output. For this implementation the probe laser is assumed to not be actively
-    controlled during the course of the sequence and is instead stabilized in between sequence
-    executions.
-    A wavemeter controller class for managing the probe laser frequency is expected to be
-    initialized prior to the start of the experiment.
-    Readout via an SPCM counter channel is expected to be performed over the duration of each
-    sequence.
+    The counter input channel is connected to the SPCM to readout the signal.
     '''
 
     def __init__(
@@ -98,6 +76,15 @@ class SimpleStateMonitoringExperiment(SequenceControllerBase):
         self.single_sequence_time = None
         self.single_sequence_repump_data = None
         self.single_sequence_probe_data = None
+        self.single_sequence_n_samples = None # Number of samples in a single sequence
+        # Data for single scans
+        self.single_probe_scan_freq = None
+        self.single_probe_scan_volt = None
+        self.single_probe_scan_data = None
+        # Sequence parameters
+        self.n_batches = None
+        self.n_repetitions = None
+        self.clock_rate = None
     
         # Generate the inputs for the measurement sequence
         sequence_inputs = {
@@ -176,7 +163,7 @@ class SimpleStateMonitoringExperiment(SequenceControllerBase):
             return None
 
         # Get the number of samples to scan, should be at least 2 steps
-        n_samples = max(1, int(np.abs(self.probe_voltage - setpoint) / max_voltage_step))
+        n_samples = max(4, int(np.abs(self.probe_voltage - setpoint) / max_voltage_step))
         # Get the voltages to scan over
         voltages = np.linspace(self.probe_voltage, setpoint, n_samples, endpoint=True)
         # If the move time is provided, set the rate accordingly
@@ -301,11 +288,11 @@ class SimpleStateMonitoringExperiment(SequenceControllerBase):
 
         # Set the laser to the start position
         self.set_probe_voltage_smooth(setpoint=voltage_min)
+        self.set_probe_switch(setpoint=True)
 
         # Repump (doing a software timed repump since it doesn't really matter)
         if repump_time > 0:
             print(f'Starting repump for {repump_time:.3f} s...')
-            self.set_probe_switch(False)
             self.set_probe_voltage(setpoint=voltage_min)
             self.set_repump_switch(True)
             time.sleep(repump_time)
@@ -360,7 +347,12 @@ class SimpleStateMonitoringExperiment(SequenceControllerBase):
 
         # Close both the repump and probe switches
         self.set_repump_switch(False)
-        self.set_probe_switch(False)    
+        self.set_probe_switch(True)     # Hold true to mitigate issue with the AOM charging time
+
+        # Record the data internally
+        self.single_probe_scan_freq = freqs
+        self.single_probe_scan_volt = probe_freq_pixels
+        self.single_probe_scan_data = data
 
         # Plot the results
         fig, ax = plt.subplots(1,1,figsize=(5,4))
@@ -370,6 +362,7 @@ class SimpleStateMonitoringExperiment(SequenceControllerBase):
         ax.set_xticks(np.linspace(freqs[0], freqs[-1], 5))
         ax.set_xlabel('Wavemeter reading (GHz or nm)')
         ax.set_ylabel('Signal (cts/s)')
+        ax.grid(alpha=0.3)
         plt.show()
 
         print('Finished probe scan.')
@@ -448,7 +441,7 @@ class SimpleStateMonitoringExperiment(SequenceControllerBase):
                     self.wavemeter_controller.close()
                     return None
                 # Else if in tollerance then do not adjust and continue
-                elif abs(e) < tol:
+                elif abs(error) < tol:
                     print('Laser in tollerance')
                     # Wait for the query period before next attempt
                     time.sleep(query_period)
@@ -471,23 +464,45 @@ class SimpleStateMonitoringExperiment(SequenceControllerBase):
         # Throw error if reached this point without converging
         raise RuntimeError('Failed to stablize at target value within allotted attempts.')
 
+    def get_sequence_output_data(
+            self,
+            **kwargs
+    ):
+        '''
+        Accepts keyword arguments defining the pulse sequence to perform and computes the output
+        datastreams then saves the sequence settings dictionary as metadata. Must set the parameters
+        following parameters in the class instance which describe the single sequence:
+        ```
+            self.single_sequence_repump_data# Binary vector representing when the repump laser is on
+            self.single_sequence_probe_data # Binary vector representing when the probe laser is on
+            self.single_sequence_n_samples  # Number of samples
+            self.sequence_settings          # A dictionary describing the necessary information to
+                                            # recreate the pulse sequence. Saved as metadata.
+        ```
+
+        Parameters
+        ----------
+        **kwargs
+            Keyword arguments defining the sequence parameters.
+        '''
+        raise NotImplementedError('Subclasses must implement this method.')
+
     def run(
             self,
             n_batches: int,
             n_repetitions: int,
-            repump_time: float,
-            probe_delay: float,
-            probe_time: float,
-            end_delay: float,
             clock_rate: float=100000,
             scan_kwargs: dict = None,
             stabilization_kwargs: dict = None,
-            save_fname: str = None
+            save_fname: str = None,
+            **kwargs
     ):
         '''
-        Runs `n_batches` of the state monitoring-pulse sequence with each batch containing
-        `n_repetitions` of the single repump-probe sequence. Before each batch the probe laser is
-        stabilized and after each batch the data is displayed.
+        Runs `n_batches` of the pulse sequence with each batch containing `n_repetitions` of the 
+        single sequence (e.g. one repump and one probe pulse) sequence. Before each batch the probe 
+        laser is stabilized and after each batch the data is displayed to the figure. If parameters
+        are provided, also can run a single scan between batches to update the desired laser
+        frequency value.
 
         Parameters
         ----------
@@ -495,14 +510,6 @@ class SimpleStateMonitoringExperiment(SequenceControllerBase):
             Number of batches to perform.
         n_repetitions: int
             Number of pulse sequence repetitions to perform per batch.
-        repump_time: float
-            Repump time for the sequence in seconds.
-        probe_delay: float
-            Delay between the end of the repump and start of the probe in seconds.
-        probe_time: float
-            Length of the probe time in seconds.
-        end_delay: float
-            Delay at after the probe ends before the next repetition begins in seconds.
         clock_rate: float=100000
             Sample clock rate for writing and reading data. Default value is 1e5. Note that the
             current implementation is limited by the analog-digital-conversion of the analog output
@@ -518,39 +525,24 @@ class SimpleStateMonitoringExperiment(SequenceControllerBase):
         save_fname: str = None
             If provided, saves the data from this run to the provided file name (adding a '.hdf5'
             extension). May include the directory.
+        **kwargs
+            Keyword arguments to the `self.get_sequence_output_data` method which computes the
+            output datastreams.
         '''
+        # Save parameters
+        self.n_batches = n_batches
+        self.n_repetitions = n_repetitions
+        self.clock_rate = clock_rate
 
-        # Get the times associated to the relevant points in the sequence in terms of clock cycles
-        idx1 = int(repump_time * clock_rate)
-        idx2 = idx1 + int(probe_delay * clock_rate)
-        idx3 = idx2 + int(probe_time * clock_rate)
-        idx4 = idx3 + int(end_delay * clock_rate)       # Number of samples per individual sequence
-
-        # Generate data for a single sequence
-        self.single_sequence_time = np.arange(idx4) / clock_rate
-        self.single_sequence_repump_data = np.zeros(idx4, dtype=np.int32)
-        self.single_sequence_repump_data[0:idx1] = 1
-        self.single_sequence_probe_data = np.zeros(idx4, dtype=np.int32)
-        self.single_sequence_probe_data[idx2:idx3] = 1
-
-        # Save the sequence parameters
-        self.sequence_settings = {
-            'n_batches': n_batches,
-            'n_repetitions': n_repetitions,
-            'repump_time': repump_time,
-            'probe_delay': probe_delay,
-            'probe_time': probe_time,
-            'end_delay': end_delay,
-            'clock_rate': clock_rate,
-            'single_sequence_samples': idx4
-        }
+        # Calculate the sequence output data save to the class instance attributes
+        self.get_sequence_output_data(**kwargs)
 
         # Set the sequence parameters
-        n_samples = n_repetitions * idx4
-        self.clock_rate = clock_rate
+        self.single_sequence_time = np.arange(self.single_sequence_n_samples) / clock_rate
+        n_samples = self.n_repetitions * self.single_sequence_n_samples
         self.output_data = {
-            self.repump_id        : np.tile(self.single_sequence_repump_data, n_repetitions), # Repeats sequence
-            self.probe_id         : np.tile(self.single_sequence_probe_data, n_repetitions),
+            self.repump_id        : np.tile(self.single_sequence_repump_data, self.n_repetitions), # Repeats sequence
+            self.probe_id         : np.tile(self.single_sequence_probe_data, self.n_repetitions),
             self.probe_id+'_freq' : None # Add this after stabiliztaion
         }
         self.input_samples = {
@@ -579,11 +571,10 @@ class SimpleStateMonitoringExperiment(SequenceControllerBase):
                 # Run the single scan
                 self.single_probe_scan(**scan_kwargs)
                 # Reset the sequence parameters
-                n_samples = n_repetitions * idx4
                 self.clock_rate = clock_rate
                 self.output_data = {
-                    self.repump_id        : np.tile(self.single_sequence_repump_data, n_repetitions), # Repeats sequence
-                    self.probe_id         : np.tile(self.single_sequence_probe_data, n_repetitions),
+                    self.repump_id        : np.tile(self.single_sequence_repump_data, self.n_repetitions), # Repeats sequence
+                    self.probe_id         : np.tile(self.single_sequence_probe_data, self.n_repetitions),
                     self.probe_id+'_freq' : None # Add this after stabiliztaion
                 }
                 self.input_samples = {
@@ -591,7 +582,7 @@ class SimpleStateMonitoringExperiment(SequenceControllerBase):
                 }
                 self.readout_delays = {}    # No delays
                 self.soft_start = {}        # No soft start
-                self.timeout = n_samples / clock_rate + 1    # 1 extra second
+                self.timeout = n_samples / self.clock_rate + 1    # 1 extra second
 
             # Stablize the laser
             if stabilization_kwargs is None:
@@ -631,9 +622,9 @@ class SimpleStateMonitoringExperiment(SequenceControllerBase):
         # Get the data for the spcm
         output_data = data[self.counter_id]
         # Get the samples per sequence
-        n_samples_sequence = int(len(output_data) / self.sequence_settings['n_repetitions'])
+        n_samples_sequence = int(len(output_data) / self.n_repetitions)
         # Reshape to array and return
-        return np.reshape(output_data,(self.sequence_settings['n_repetitions'],n_samples_sequence))
+        return np.reshape(output_data,(self.n_repetitions,n_samples_sequence))
 
     def process_scan_data(
             self,
@@ -663,11 +654,12 @@ class SimpleStateMonitoringExperiment(SequenceControllerBase):
         # Add the extension
         fname = filename+'.hdf5'
 
-        # Check if a file with the same name already exists
-        if os.path.isfile(fname):
-            print(f'File `{fname}` already exists, adding duplicate flag.')
-            fname = filename + '-1.hdf5'
-            # If this duplicate already exists then it gets overwritten!
+        # Check if a file with the same name already exists, add counter if it does
+        k = 0
+        while os.path.isfile(fname):
+            print(f'File `{fname}` already exists.')
+            fname = filename + '-'+str(k)+'.hdf5'
+            k += 1
 
         # Save as hdf5
         print(f'Saving data as `{fname}`.')
@@ -690,128 +682,118 @@ class SimpleStateMonitoringExperiment(SequenceControllerBase):
             f.create_dataset('samples', data=np.array(self.data_batches, dtype=np.float32))
             f.create_dataset('target_freqs', data=np.array(self.batch_probe_targets))
 
+            # Save data for the last scan for finding the resonance
+            f.create_dataset('scan_freqs', data=np.array(self.single_probe_scan_freq))
+            f.create_dataset('scan_volts', data=np.array(self.single_probe_scan_volt))
+            f.create_dataset('scan_signal', data=np.array(self.single_probe_scan_data))
+            # Save the last target frequency
+            f.create_dataset('target_freq', data=np.array([self.probe_target,]))
+
         print('File saved.')
 
-
-class StateMonitoringExperiment(RepumpProbeSequenceBase):
-
-    '''
-    This class implements a simple state monitoring experimental sequence. The experimental protocol
-    is comprised of two lasers "repump" and "probe". The repump is periodically pulsed to pump the
-    system into a given state while the probe monitors the state. Graphically:
-
-    ```
-        repump    __|=======|___________________________________
-
-        probe     ______________|===========================|___ 
-
-                    |       |   |                           |   |
-                    t=0     t1  t2                          t3  t4
-
-        t1      = Repump time
-        t2 - t1 = Delay between repump and probe start
-        t3 - t2 = Probe time
-        t4 - t3 = Delay betwen probe and start of next repetition
-    ```
-
-    The repump laser is assumed to be some static off resonant laser with pulse control via a 
-    digital output.
-    The probe laser is assumed to be tunable with some analog output voltage and have pulse control
-    via a digital output. For this implementation the probe laser is assumed to not be actively
-    controlled during the course of the sequence and is instead stabilized in between sequence
-    executions.
-    A wavemeter controller class for managing the probe laser frequency is expected to be
-    initialized prior to the start of the experiment.
-    Readout via an SPCM counter channel is expected to be performed over the duration of each
-    sequence.
-    '''
-
-    def __init__(
+    def get_max_dit_contrast(
             self,
-            repump_id: str,
-            repump_do_config: dict,
-            probe_id: str,
-            probe_do_config: dict,
-            probe_ao_config: dict,
-            counter_id: str,
-            counter_ci_config: dict,
-            wavemeter_controller: WavemeterController,
-            clock_device: str = 'Dev1',
-            clock_channel: str = 'ctr0',
+            cavity_wavelength,
+            kappa=115,
+            gamma=0.15,
+            Delta = 0,
+            g = 2,
+            splitting=0.1
     ):
-        # Just init from the base class
-        super().__init__(
-            repump_id = repump_id,
-            repump_do_config = repump_do_config,
-            probe_id = probe_id,
-            probe_do_config = probe_do_config,
-            probe_ao_config = probe_ao_config,
-            counter_id = counter_id,
-            counter_ci_config = counter_ci_config,
-            wavemeter_controller = wavemeter_controller,
-            clock_device = clock_device,
-            clock_channel = clock_channel
+        '''
+        Gets the index corresponding to the frequency/voltage that maximizes the contrast of the
+        DIT signal for a drop port signal.
+        '''
+        # Estimate cavity center frequency from known cavity wavelength
+        omega0 = 299792458 / cavity_wavelength # C[nm GHz] / wavelength[nm]
+        print(f'Cavity center frequency {omega0:.1f}')
+        # Data
+        xfit = self.single_probe_scan_freq - omega0
+        yfit = self.single_probe_scan_data
+
+        # Define the model (needs to be dynamically created to set kappa,gamma)
+        def split_drop_dit(
+                delta,
+                Delta,
+                g,
+                splitting,
+                c0,
+                c1
+        ):
+            peak1 = self._single_drop_dit(delta, Delta=Delta-splitting/2, g=g, kappa=kappa, gamma=gamma)
+            peak2 = self._single_drop_dit(delta, Delta=Delta+splitting/2, g=g, kappa=kappa, gamma=gamma)
+            signal = (peak1 + peak2)/2 
+            return signal * (c0 + c1*(delta-Delta))
+
+        # Parameter estimates
+        p0 = [Delta, g, splitting, np.average(yfit), 0]
+        # Fit
+        p, c = curve_fit(
+            f=split_drop_dit,
+            xdata=xfit,
+            ydata=yfit,
+            p0=p0,
+            bounds=[ [-np.inf, 0, 0, 0, -np.inf], [np.inf,]*5 ]
         )
 
-    def get_sequence_output_data(
+        # Determine the contributions
+        Delta, g, splitting, c0, c1 = p
+        peak1 = self._single_drop_dit(xfit, Delta=Delta-splitting/2, g=g, kappa=kappa, gamma=gamma)
+        peak2 = self._single_drop_dit(xfit, Delta=Delta+splitting/2, g=g, kappa=kappa, gamma=gamma)
+        norm = self._single_drop_dit(xfit, Delta=Delta, g=0, kappa=kappa, gamma=gamma)
+        contrast = np.abs(peak1 - peak2) / norm
+
+        # Get the frequency and voltage of the maximum
+        max_idx = np.argmax(contrast)
+        target_freq = self.single_probe_scan_freq[max_idx]
+        target_volt = self.single_probe_scan_volt[max_idx]
+        # Set the voltage to the center value
+        self.set_probe_voltage_smooth(target_volt)
+        # Set the target frequency reading to the center value
+        self.set_probe_target(target_freq)
+
+        # Plot the results
+        fig, ax = plt.subplots(figsize=(4,3))
+        ax.plot(xfit, yfit, 'o')
+        ax.plot(xfit, split_drop_dit(xfit, *p), 'k-')
+        ax.set_xlabel('frequency (GHz)')
+        ax.set_ylabel('signal')
+        plt.show()
+
+
+    def _single_drop_dit(
             self,
-            repump_time: float,
-            probe_delay: float,
-            probe_time: float,
-            end_delay: float,
+            delta,
+            Delta,
+            g,
+            kappa,
+            gamma
     ):
         '''
-        Accepts keyword arguments defining the pulse sequence to perform and computes the output
-        datastreams then saves the sequence settings dictionary as metadata. Must set the parameters
-        following parameters in the class instance which describe the single sequence:
-        ```
-            self.single_sequence_repump_data# Binary vector representing when the repump laser is on
-            self.single_sequence_probe_data # Binary vector representing when the probe laser is on
-            self.single_sequence_n_samples  # Number of samples
-            self.sequence_settings          # A dictionary describing the necessary information to
-                                            # recreate the pulse sequence. Saved as metadata.
-        ```
-
-        Parameters
-        ----------
-        repump_time: float
-            Repump time for the sequence in seconds.
-        probe_delay: float
-            Delay between the end of the repump and start of the probe in seconds.
-        probe_time: float
-            Length of the probe time in seconds.
-        end_delay: float
-            Delay at after the probe ends before the next repetition begins in seconds.
+        Gets the single SiV DIT signal as a function of the cavity detuning delta.
         '''
-
-        # Get the times associated to the relevant points in the sequence in terms of clock cycles
-        idx1 = int(repump_time * self.clock_rate)
-        idx2 = idx1 + int(probe_delay * self.clock_rate)
-        idx3 = idx2 + int(probe_time * self.clock_rate)
-        idx4 = idx3 + int(end_delay * self.clock_rate)       # Number of samples per individual sequence
-
-        self.single_sequence_n_samples = idx4
-
-        # Generate data for a single sequence
-        self.single_sequence_time = np.arange(self.single_sequence_n_samples) / self.clock_rate
-        self.single_sequence_repump_data = np.zeros(self.single_sequence_n_samples, dtype=np.int32)
-        self.single_sequence_repump_data[0:idx1] = 1
-        self.single_sequence_probe_data = np.zeros(self.single_sequence_n_samples, dtype=np.int32)
-        self.single_sequence_probe_data[idx2:idx3] = 1
-
-        # Save the sequence parameters
-        self.sequence_settings = {
-            'n_batches': self.n_batches,
-            'n_repetitions': self.n_repetitions,
-            'repump_time': repump_time,
-            'probe_delay': probe_delay,
-            'probe_time': probe_time,
-            'end_delay': end_delay,
-            'clock_rate': self.clock_rate,
-            'single_sequence_samples': self.single_sequence_n_samples
-        }
-
-
+        kappa = kappa
+        gamma = gamma
+        num = kappa * (1j*(delta-Delta) + gamma/2)
+        den = (1j*(delta-Delta) + gamma/2) * (1j*delta + kappa/2) + g*g
+        return np.abs(num/den)**2
+    
+    def _split_drop_dit(
+            self,
+            delta,
+            Delta,
+            g,
+            splitting,
+            c0,
+            c1
+    ):
+        '''
+        Gets a split DIT signal with linear background
+        '''
+        peak1 = self._single_drop_dit(delta, Delta-splitting/2, g)
+        peak2 = self._single_drop_dit(delta, Delta+splitting/2, g)
+        signal = (peak1 + peak2)/2 
+        return signal * (c0 + c1*(delta-Delta))
 
 
 
