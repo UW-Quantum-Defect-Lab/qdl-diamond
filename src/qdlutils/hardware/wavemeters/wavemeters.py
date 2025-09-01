@@ -32,6 +32,23 @@ class WavemeterController:
     
     def readout(self):
         '''
+        Outputs the current value on the wavemeter in standard numeric datatypes (float, int) along
+        with an integer time tag in units of 10 milliseconds. The time tag can be take with respect
+        to an initial time set when the serial channel is first opened.
+
+        Returns
+        -------
+        timetag : int
+        value : Union[float,int]
+        '''
+        raise NotImplementedError('This is the base class.')
+    
+    def read_current_val(self):
+        '''
         Outputs the current value on the wavemeter in standard numeric datatypes (float, int).
+
+        Returns
+        -------
+        value : Union[float,int]
         '''
         raise NotImplementedError('This is the base class.')
