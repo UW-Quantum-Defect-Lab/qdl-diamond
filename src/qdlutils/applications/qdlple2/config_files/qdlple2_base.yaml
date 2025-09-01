@@ -124,11 +124,10 @@ qdlple2:
     # how the software intend to use them --- we use the information here to construct the specific
     # controllers and pass them as arguments specified by the leading name, e.g. 'wavemeter'
     wavemeter:
-      import_path: qdlutils.hardware.wavemeters.coherentwavemaster
-      class_name : CoherentWaveMaster
+      import_path: qdlutils.hardware.wavemeters.burleighwa1600
+      class_name : BurleighWA1600
       config:
         port: 'COM1'
-        timeout: 1
-        units: 'F'
-        mode: 'C'
-        autocal: False
+        timeout: 2
+        units: 'FREQ'
+        mode: 'READ'

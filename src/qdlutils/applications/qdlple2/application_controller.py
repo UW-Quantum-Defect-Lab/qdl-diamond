@@ -808,6 +808,10 @@ class PLEControllerPulsedRepumpSegmentedWithWavemeter(PLEControllerPulsedRepumpS
         '''
         # Open the wavemeter connection
         self.wavemeter.open()
+        # Wait for the wavemeter to recenter itself (Added for burleigh case, may want to remove)
+        while self.wavemeter.read_current_val() < 100:
+            logger.info('Waiting for wavemeter to stabilize...')
+            time.sleep(0.5)
 
         # Run the repump sequence
         logger.info('Starting repump...')
@@ -930,9 +934,12 @@ class PLEControllerPulsedRepumpSegmentedWithWavemeter(PLEControllerPulsedRepumpS
             try:
                 # Attempt to readout the wavemeter
                 tag, val = self.wavemeter.readout()
-                # Append the results
-                self.last_thread_wavemeter_tags.append(tag)
-                self.last_thread_wavemeter_vals.append(val)
+                # Append the results if valid (zero values are not allowed)
+                if val > 100:
+                    self.last_thread_wavemeter_tags.append(tag)
+                    self.last_thread_wavemeter_vals.append(val)
+                else:
+                    logger.debug('Wavemeter readout error: reading value invalid')
             # Catch excpetions (i.e. if the wavemeter hasn't gotten a new value to output yet)
             except Exception as e:
                 logger.debug('Wavemeter readout error:', e)
