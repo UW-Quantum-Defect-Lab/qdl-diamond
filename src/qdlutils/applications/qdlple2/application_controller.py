@@ -490,14 +490,14 @@ class PLEControllerPulsedRepumpSegmented(SequenceControllerBase):
             raise ValueError(f'Requested repump time {time_repump} is invalid (must be non-negative).')
 
         # Compute the number of samples
-        self.n_samples_repump = int(time_repump * 1000)
+        self.n_samples_repump = int(time_repump * 100000)
         self.n_samples_upscan = n_pixels_up * n_subpixels
         self.n_samples_downscan = n_pixels_down * n_subpixels 
         self.n_samples_scan = self.n_samples_upscan + self.n_samples_downscan
         self.n_samples_total = self.n_samples_repump + self.n_samples_upscan + self.n_samples_downscan
 
         # Compute the sample rates
-        self.sample_rate_repump = 1000
+        self.sample_rate_repump = 100000
         self.sample_rate_upscan = self.n_samples_upscan / time_up
         self.sample_rate_downscan = self.n_samples_downscan / time_down
 
