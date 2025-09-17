@@ -214,6 +214,17 @@ class RepumpProbeSequenceBase(SequenceControllerBase):
         '''
         self.probe_target = val
 
+    def set_probe_target_as_current(
+            self
+    ):  
+        '''
+        Sets the target reading for the wavemeter to the current wavemeter reading
+        '''
+        self.wavemeter_controller.open()
+        time_tag, probe_target = self.wavemeter_controller.readout()
+        self.wavemeter_controller.close()
+        self.probe_target = probe_target
+
     def single_probe_scan(
             self,
             voltage_min: float,
@@ -222,6 +233,7 @@ class RepumpProbeSequenceBase(SequenceControllerBase):
             scan_time: float,
             repump_time: float,
             optimize: str = None,
+            setpoint_offset: float = 0.1
     ):
         '''
         Configures and performs a single probe laser sweep to assist in locating the resonance
@@ -244,8 +256,19 @@ class RepumpProbeSequenceBase(SequenceControllerBase):
         repump_time: float
             Time to repump for in seconds
         optimize: str = None
-            Dictates if and how the probe frequency should be optimized. Options are `'min'` or 
-            `'max'` which attempts to place the probe frequency at the min or max of the scan
+            Dictates if and how the probe frequency should be optimized. Options are
+            - `min`
+            - `max`
+            - `min_offset`
+            - `max_offset`
+            - `min_offset_volt`
+            - `max_offset_volt`
+            The addition of the suffix `_volt` will move the voltage first to get the target 
+            frequency rather than estimate the target frequency from the scan itself.
+            If `None` or some other keyword then will simply move back to the start position.
+        setpoint_offset: float = 0.1
+            The amount to offset the setpoint relative to the min/max when using the ``min-offset''
+            or ``max-offset'' optimization options.
         '''
 
         # Verify the data
@@ -340,6 +363,60 @@ class RepumpProbeSequenceBase(SequenceControllerBase):
             self.set_probe_target(center_freq)
             # Report
             print(f'Setting probe to the min signal at {center_voltage:.2f} V and wavemeter reading {center_freq:.4f}')
+        elif optimize == 'min_offset':
+            # Get the max value in the scan range and center the laser on it
+            min_idx = np.argmin(data)
+            center_freq = freqs[min_idx]
+            center_voltage = probe_freq_pixels[min_idx]
+            # Set the voltage to the center value
+            self.set_probe_voltage_smooth(center_voltage)
+            # Set the target frequency reading to the center value
+            self.set_probe_target(center_freq + setpoint_offset)
+            # Report
+            print(f'Setting probe to the min signal with {setpoint_offset:.2f} offset at {center_voltage:.2f} V and wavemeter reading {center_freq:.4f}')
+            center_freq = center_freq + setpoint_offset
+        elif optimize == 'max_offset':
+            # Get the max value in the scan range and center the laser on it
+            max_idx = np.argmax(data)
+            center_freq = freqs[max_idx]
+            center_voltage = probe_freq_pixels[max_idx]
+            # Set the voltage to the center value
+            self.set_probe_voltage_smooth(center_voltage)
+            # Set the target frequency reading to the center value
+            self.set_probe_target(center_freq + setpoint_offset)
+            # Report
+            print(f'Setting probe to the max signal with {setpoint_offset:.2f} offset at {center_voltage:.2f} V and wavemeter reading {center_freq:.4f}')
+            center_freq = center_freq + setpoint_offset
+        elif optimize == 'min_offset_volt':
+            # Get the max value in the scan range and center the laser on it
+            min_idx = np.argmin(data)
+            center_voltage = probe_freq_pixels[min_idx]
+            # Set the voltage to the center value
+            self.set_probe_voltage_smooth(center_voltage)
+            # Read the current wavelength (assumes the voltage is more accurate than the wavemeter estimation)
+            self.wavemeter_controller.open()
+            time_tag, probe_target = self.wavemeter_controller.readout()
+            self.wavemeter_controller.close()
+            # Set the target frequency reading to the center value
+            self.set_probe_target(probe_target + setpoint_offset)
+            # Report
+            print(f'(Using voltage) Setting probe to the min signal with {setpoint_offset:.2f} offset at {center_voltage:.2f} V and wavemeter reading {probe_target:.4f}')
+            center_freq = probe_target + setpoint_offset
+        elif optimize == 'max_offset_volt':
+            # Get the max value in the scan range and center the laser on it
+            max_idx = np.argmin(data)
+            center_voltage = probe_freq_pixels[max_idx]
+            # Set the voltage to the center value
+            self.set_probe_voltage_smooth(center_voltage)
+            # Read the current wavelength (assumes the voltage is more accurate than the wavemeter estimation)
+            self.wavemeter_controller.open()
+            time_tag, probe_target = self.wavemeter_controller.readout()
+            self.wavemeter_controller.close()
+            # Set the target frequency reading to the center value
+            self.set_probe_target(probe_target + setpoint_offset)
+            # Report
+            print(f'(Using voltage) Setting probe to the max signal with {setpoint_offset:.2f} offset at {center_voltage:.2f} V and wavemeter reading {probe_target:.4f}')
+            center_freq = probe_target + setpoint_offset
         else:
             # No optimization so return to the beginning
             self.set_probe_voltage_smooth(voltage_min)
@@ -392,7 +469,8 @@ class RepumpProbeSequenceBase(SequenceControllerBase):
             max_attempts: float = 50,
             query_period: float = 0.25,
             freq_volt_grad: float = -24,
-            penalty: float = 0.95
+            penalty: float = 0.95,
+            probe_on: bool = False
     ):
         '''
         Parameters
@@ -418,6 +496,11 @@ class RepumpProbeSequenceBase(SequenceControllerBase):
             desired value.
         '''
         print(f'Stabilizing the laser at {self.probe_target:.4f}.')
+
+        if probe_on:
+            self.set_probe_switch(True)
+        else:
+            self.set_probe_switch(False)
 
         # Open the wavemeter
         self.wavemeter_controller.open()
