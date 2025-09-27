@@ -135,7 +135,13 @@ class LauncherControlPanel:
         self.scan_laser_toggle_label.grid(row=row, column=0, pady=[0,0])
         self.scan_laser_toggle = tk.Checkbutton ( control_frame, var=self.scan_laser_on)
         self.scan_laser_toggle.grid(row=row, column=1, pady=[0,0])
-
+        # Toggle for the pump laser
+        row += 1
+        self.pump_laser_on = tk.IntVar()
+        self.pump_laser_toggle_label = tk.Label(control_frame, text='Toggle pump laser')
+        self.pump_laser_toggle_label.grid(row=row, column=0, pady=[0,0])
+        self.pump_laser_toggle = tk.Checkbutton ( control_frame, var=self.pump_laser_on)
+        self.pump_laser_toggle.grid(row=row, column=1, pady=[0,0])
 
 
 

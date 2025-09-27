@@ -1,7 +1,7 @@
 qdlple2:
   ApplicationController :
     import_path : qdlutils.applications.qdlple2.application_controller
-    class_name : PLEControllerPulsedRepumpSegmentedWithWavemeter
+    class_name : PLEControllerPulsedRepumpCWPumpSegmentedWithWavemeter
     configure :
       scan_inputs:
         - scan_ci_rate    # These point to the hardware groups defined below
@@ -22,6 +22,7 @@ qdlple2:
       scan_laser_id : scan_laser_voltage      # The name of the scan laser as defined below
       scan_laser_switch_id: scan_laser_switch # The name of the scan laser switch as defined below
       repump_laser_id : repump_laser_switch   # The name of the repump laser as defined below
+      pump_laser_id : pump_laser_switch       # The name of the pump laser as defined below
       counter_id : counter_rate               # The name of the counter as defined below
       nondaq_devices:
         - wavemeter
@@ -46,6 +47,7 @@ qdlple2:
       channels:
         - scan_laser_switch
         - repump_laser_switch
+        - pump_laser_switch
       
     scan_ci_rate:
       import_path: qdlutils.hardware.nidaq.synchronous.nidaqsequencerinputgroup
@@ -72,6 +74,7 @@ qdlple2:
       channels:
         - scan_laser_switch
         - repump_laser_switch
+        - pump_laser_switch
 
    
         
@@ -98,6 +101,12 @@ qdlple2:
       device: Dev1
       port: port0
       line: line0
+      process_instructions:
+
+    pump_laser_switch:
+      device: Dev1
+      port: port0
+      line: line2
       process_instructions:
 
     counter_rate:

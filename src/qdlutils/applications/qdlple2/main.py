@@ -81,10 +81,12 @@ class LauncherApplication:
         self.view.control_panel.goto_button.bind("<Button>", self.set_laser)
         self.view.control_panel.repump_laser_toggle.config(command=self.toggle_repump_laser)
         self.view.control_panel.scan_laser_toggle.config(command=self.toggle_scan_laser)
+        self.view.control_panel.pump_laser_toggle.config(command=self.toggle_pump_laser)
 
         # Toggle the repump laser to match default state (off)
         self.toggle_repump_laser()
         self.toggle_scan_laser()
+        self.toggle_pump_laser()
 
     def run(self) -> None:
         '''
@@ -319,8 +321,36 @@ class LauncherApplication:
                     setpoint=False
                 )
         except Exception as e:
-            logger.error(f'Repump laser could not be toggled: {e}')
+            logger.error(f'Scan laser could not be toggled: {e}')
 
+    def toggle_pump_laser(
+            self, 
+            set_value: bool = None
+    ) -> None:
+        '''
+        Callback to toggle the scan laser. If called outside of a callback function, the parameter
+        `set_value` determines the toggled state, independent of the GUI.
+        '''
+
+        try: 
+            # If the GUI toggle is on and no direct command `cmd` given
+            # OR if the direct command is True then turn on the laser
+            if (self.view.control_panel.pump_laser_on.get() == 1) or (set_value is True):
+                logger.info('Turning pump laser on.')
+                self.application_controller.set_output(
+                    output_id=self.application_controller.pump_laser_id, 
+                    setpoint=True
+                )
+            # Else if the GUI toggle is off and no direct command is given
+            # OR if the direct command is False then turn off the laser
+            elif (self.view.control_panel.pump_laser_on.get() == 0) or (set_value is False):
+                logger.info('Turning pump laser off.')
+                self.application_controller.set_output(
+                    output_id=self.application_controller.pump_laser_id, 
+                    setpoint=False
+                )
+        except Exception as e:
+            logger.error(f'Pump laser could not be toggled: {e}')
 
     def _read_gui(
             self
@@ -341,6 +371,7 @@ class LauncherApplication:
         time_repump = float(self.view.control_panel.repump_entry.get())
         n_scans = int(self.view.control_panel.scan_num_entry.get())
         laser_setpoint = float(self.view.control_panel.laser_setpoint.get())
+        pump_on = bool(self.view.control_panel.pump_laser_on.get())
 
         # Get the scan configuration parameters
         scan_config_params = {
@@ -352,6 +383,7 @@ class LauncherApplication:
             'time_up' : time_up,
             'time_down' : time_down,
             'time_repump' : time_repump,
+            'pump_on' : pump_on
         }
 
         # Set the GUI input
@@ -472,11 +504,13 @@ class ScanApplication:
             logger.info('All scans complete.')
 
         except Exception as e:
-            logger.error(f'Error in scan thread: {e}')
+            raise e
+            #logger.error(f'Error in scan thread: {e}')
 
         finally:
             self.parent_application.toggle_repump_laser()
             self.parent_application.toggle_scan_laser()
+            self.parent_application.toggle_pump_laser()
 
     def stop_scan(
             self,

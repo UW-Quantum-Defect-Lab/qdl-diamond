@@ -328,7 +328,6 @@ class PLEControllerPulsedRepumpContinuous(PLEControllerBase):
     
 
 
-
 class PLEControllerPulsedRepumpSegmented(SequenceControllerBase):
     '''
     This version of the PLE controller splits the sequence into three separate segments, each of
@@ -945,3 +944,209 @@ class PLEControllerPulsedRepumpSegmentedWithWavemeter(PLEControllerPulsedRepumpS
                 logger.debug('Wavemeter readout error:', e)
             # Wait for the delay (accounts for finite delay between subsequent wavemeter readout)
             time.sleep(self.nondaq_query_delay)
+
+
+class PLEControllerPulsedRepumpCWPumpSegmentedWithWavemeter(PLEControllerPulsedRepumpSegmentedWithWavemeter):
+
+    def __init__(
+            self,
+            scan_inputs: dict[str,NidaqSequencerInputGroup],
+            scan_outputs: dict[str,NidaqSequencerOutputGroup],
+            repump_inputs: dict[str,NidaqSequencerInputGroup],
+            repump_outputs: dict[str,NidaqSequencerOutputGroup],
+            scan_laser_id: str,
+            scan_laser_switch_id: str,
+            repump_laser_id: str,
+            pump_laser_id: str,
+            counter_id: str,
+            nondaq_devices: list[str],
+            wavemeter: WavemeterController,
+            scan_clock_device: str = 'Dev1',
+            scan_clock_channel: str = 'ctr0',
+            scan_clock_terminal: str = 'PFI12',
+            repump_clock_device: str = 'Dev1',
+            repump_clock_channel: str = 'ctr0',
+            repump_clock_terminal: str = 'PFI12',
+            nondaq_query_delay: float = 0.1,
+            process_instructions: dict = {}
+    ):
+        super().__init__(
+            scan_inputs = scan_inputs,
+            scan_outputs = scan_outputs,
+            repump_inputs = repump_inputs,
+            repump_outputs = repump_outputs,
+            scan_laser_id = scan_laser_id,
+            scan_laser_switch_id = scan_laser_switch_id,
+            repump_laser_id = repump_laser_id,
+            counter_id = counter_id,
+            nondaq_devices = nondaq_devices,
+            wavemeter = wavemeter,
+            scan_clock_device = scan_clock_device,
+            scan_clock_channel = scan_clock_channel,
+            scan_clock_terminal = scan_clock_terminal,
+            repump_clock_device = repump_clock_device,
+            repump_clock_channel = repump_clock_channel,
+            repump_clock_terminal = repump_clock_terminal,
+            nondaq_query_delay = nondaq_query_delay,
+            process_instructions = process_instructions,
+        )
+        self.pump_laser_id = pump_laser_id
+
+    def configure_sequence(
+            self,
+            min,
+            max,
+            n_pixels_up,
+            n_pixels_down,
+            n_subpixels,
+            time_up,
+            time_down,
+            time_repump,
+            pump_on
+    ):
+        '''
+        In this current implementation, it is assumed that only the `repump_laser` is included as
+        an output for the repump. Likewise, it is assumed that only the `scan_laser` is included as
+        an output for the scan.
+        '''
+        # Save the scan parameters
+        self.min=min
+        self.max=max
+        self.n_pixels_up=n_pixels_up
+        self.n_pixels_down=n_pixels_down
+        self.n_subpixels=n_subpixels
+        self.n_subpixels_up=n_subpixels*n_pixels_up
+        self.n_subpixels_down=n_subpixels*n_pixels_down
+        self.time_up=time_up
+        self.time_down=time_down
+        self.time_repump=time_repump
+
+        self.sequence_settings = {
+            'min': self.min,
+            'max': self.max,
+            'n_pixels_up': self.n_pixels_up,
+            'n_pixels_down': self.n_pixels_down,
+            'n_subpixels': self.n_subpixels,
+            'n_subpixels_up': self.n_subpixels_up,
+            'n_subpixels_down': self.n_subpixels_down,
+            'time_up': self.time_up,
+            'time_down': self.time_down,
+            'time_repump': self.time_repump,
+        }
+
+        # Check if the max > min and both are within the scan laser's range
+        if max > min:
+            self.upscan_sequencer.validate_output_data(output_name=self.scan_laser_id,data=min)
+            self.upscan_sequencer.validate_output_data(output_name=self.scan_laser_id,data=max)
+        else:
+            raise ValueError(f'Requested max {max:.3f} is less than min {min:.3f}.')
+        # Check if pixel numbers are positive integers
+        if type(n_pixels_up) is not int or n_pixels_up < 1:
+            raise ValueError(f'Requested # pixels up {n_pixels_up} is invalid (must be at least 1).')
+        if type(n_pixels_down) is not int or n_pixels_down < 1:
+            raise ValueError(f'Requested # pixels down {n_pixels_down} is invalid (must be at least 1).')
+        if type(n_subpixels) is not int or n_subpixels < 1:
+            raise ValueError(f'Requested # subpixels {n_subpixels} is invalid (must be at least 1).')
+        # Check that up/downscan times are greater than zero.
+        if not (time_up > 0):
+            raise ValueError(f'Requested upsweep time {time_up}s is invalid (must be > 0).')
+        if not (time_down > 0):
+            raise ValueError(f'Requested downsweep time {time_down}s is invalid (must be > 0).')
+        # Check if repump time is nonzero
+        if time_repump < 0:
+            raise ValueError(f'Requested repump time {time_repump} is invalid (must be non-negative).')
+
+        # Compute the number of samples
+        self.n_samples_repump = int(time_repump * 100000)
+        self.n_samples_upscan = n_pixels_up * n_subpixels
+        self.n_samples_downscan = n_pixels_down * n_subpixels 
+        self.n_samples_scan = self.n_samples_upscan + self.n_samples_downscan
+        self.n_samples_total = self.n_samples_repump + self.n_samples_upscan + self.n_samples_downscan
+
+        # Compute the sample rates
+        self.sample_rate_repump = 100000
+        self.sample_rate_upscan = self.n_samples_upscan / time_up
+        self.sample_rate_downscan = self.n_samples_downscan / time_down
+
+        # Compute output datastream for the scanning laser
+        scan_samples_upscan = np.linspace(start=min, stop=max, num=self.n_samples_upscan, endpoint=False)
+        scan_samples_downscan = np.linspace(start=max, stop=min, num=self.n_samples_downscan, endpoint=False)
+        # Compute the output datastream for scanning laser and repump laser switches
+        # Scan laser is on continuously while the repump laser is off
+        scan_laser_switch_samples_upscan = np.ones(self.n_samples_upscan)
+        repump_samples_upscan = np.zeros(self.n_samples_upscan)
+        scan_laser_switch_samples_downscan = np.ones(self.n_samples_downscan)
+        repump_samples_downscan = np.zeros(self.n_samples_downscan)
+        # Turn the pump on if indicated on the GUI
+        if pump_on:
+            logger.info('Pump ON during scan.')
+            pump_samples_upscan = np.ones(self.n_samples_upscan)
+            pump_samples_downscan = np.ones(self.n_samples_downscan)
+            pump_laser_switch_samples_repump = np.ones(self.n_samples_repump+2, dtype=np.uint32)
+        else:
+            logger.info('Pump OFF during scan.')
+            pump_samples_upscan = np.zeros(self.n_samples_upscan)
+            pump_samples_downscan = np.zeros(self.n_samples_downscan)
+            pump_laser_switch_samples_repump = np.zeros(self.n_samples_repump+2, dtype=np.uint32)
+
+        # Compute output datstream for the repump sequence
+        # Repump laser is on continuously, add two additional points and turn off repump.
+        # This is necessary so that there is at least 2 samples so that the repump sequence can
+        # execute without error. For some reason `nidaqmx` throws confusing errors if you try to
+        # perform a stream write with only one sample... This just adds about 2 ms of delay...
+        repump_samples_repump = np.ones(self.n_samples_repump+2, dtype=np.uint32)
+        repump_samples_repump[-2:] = 0
+        # Scan laser is also on continuously (can turn off but no point in doing so)
+        scan_laser_switch_samples_repump = np.ones(self.n_samples_repump+2, dtype=np.uint32)
+        # Scan laser voltage is set to the start value
+        scan_laser_samples_repump = np.ones(self.n_samples_repump+2) * min
+
+        # Save the output datastreams
+        self.output_data_repump = {
+            self.repump_laser_id: repump_samples_repump,
+            self.scan_laser_switch_id: scan_laser_switch_samples_repump,
+            self.scan_laser_id: scan_laser_samples_repump,
+            self.pump_laser_id: pump_laser_switch_samples_repump
+        }
+        self.output_data_upscan = {
+            self.repump_laser_id: repump_samples_upscan,
+            self.scan_laser_switch_id: scan_laser_switch_samples_upscan,
+            self.scan_laser_id: scan_samples_upscan,
+            self.pump_laser_id: pump_samples_upscan
+        }
+        self.output_data_downscan = {
+            self.repump_laser_id: repump_samples_downscan,
+            self.scan_laser_switch_id: scan_laser_switch_samples_downscan,
+            self.scan_laser_id: scan_samples_downscan,
+            self.pump_laser_id: pump_samples_downscan
+        }
+        # Perform a soft start in general
+        self.soft_start = {
+            self.scan_laser_id: True,
+            self.scan_laser_switch_id: True,
+            self.repump_laser_id: True,
+            self.pump_laser_id: True
+        }
+        # Inputs are all treated the same and so we assign the same values for `n_samples` and
+        # the corresponding readout delays
+        self.input_samples_repump = {
+            id: self.n_samples_repump for id in self.repump_sequencer.input_channels_group
+        }
+        self.input_samples_upscan = {
+            id: self.n_samples_upscan for id in self.upscan_sequencer.input_channels_group
+        }
+        self.input_samples_downscan = {
+            id: self.n_samples_downscan for id in self.downscan_sequencer.input_channels_group
+        }
+        # No readout delays for now.
+        self.readout_delays = {id: 0 for id in self.upscan_sequencer.input_channels_group} | {id: 0 for id in self.repump_sequencer.input_channels_group}
+        # Estimate the complete repump + scan cycle time and set the timeout (add 1 second buffer)
+        self.timeout_repump = time_repump + 1
+        self.timeout_upscan = time_up + 1
+        self.timeout_downscan = time_down + 1
+
+
+        # Need to additionally determine the buffersize since the number of wavemeter queries varies
+        # depending on random delays in the serial protocol.
+        self.upscan_query_buffer_size = int(time_up / self.nondaq_query_delay) + 1
+        self.downscan_query_buffer_size = int(time_down / self.nondaq_query_delay) + 1
