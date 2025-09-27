@@ -28,14 +28,14 @@ logging.basicConfig(level=logging.INFO)
 class RepumpProbeSequenceBase(SequenceControllerBase):
 
     '''
-    This class implements the basic features for pulse sequence experiments involving a repump laser
+    This class implements the basic features for pulse sequenc e experiments involving a repump laser
     and probe laser.
 
     The repump laser does not have any frequency control but is turned on/off via a TTL digital
     output signal.
 
     The probe laser is also turned on/off via a TTL digital output signal and has frequency control
-    via a analog voltage output.
+    via an analog voltage output.
 
     The counter input channel is connected to the SPCM to readout the signal.
     '''
@@ -842,7 +842,6 @@ class RepumpProbeSequenceBase(SequenceControllerBase):
         ax.set_xlabel('frequency (GHz)')
         ax.set_ylabel('signal')
         plt.show()
-
 
     def _single_drop_dit(
             self,
