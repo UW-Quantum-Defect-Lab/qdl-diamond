@@ -178,7 +178,8 @@ class PulsedPLE(SequenceControllerBase):
             num_pixels: int,
             repump_time: float, # in ms
             read_time: float,   # in ms
-            direction: str = 'up'
+            direction: str = 'up',
+            num_subpixels: int = 1
     ):
         # Verify the data
         if voltage_max > voltage_min:
@@ -192,36 +193,39 @@ class PulsedPLE(SequenceControllerBase):
             raise ValueError('Scan time must be between more than 0 and less than 10 second.')
         if repump_time < 0 or repump_time > 10000:
             raise ValueError('Repump time must be non-negative and less than 10 seconds.') 
+        if num_subpixels < 1:
+            raise ValueError('# of subpixels must be at least 1')
         
-        # Clock rate is constant to give 100 us steps.
-        clock_rate = 10000 # 1 kHz
+        # Clock rate is constant to give 10 us steps.
+        clock_rate = 100000 # 100 kHz
 
-        # Laser pulse sequence per pixel
-        time_per_pixel = 1e-3 * (repump_time + read_time) # in s
-        clock_cycles_per_pixel = int(clock_rate * time_per_pixel)
+        # Laser pulse sequence per subpixel
+        time_per_subpixel = 1e-3 * (repump_time + read_time) # in s
+        clock_cycles_per_subpixel = int(clock_rate * time_per_subpixel)
         clock_cycles_repump = int(1e-3 * repump_time * clock_rate)
         # Generate the data
-        repump_data_per_pixel = np.zeros(clock_cycles_per_pixel)
-        repump_data_per_pixel[:clock_cycles_repump] = 1             # Repump is on for the first part
-        probe_data_per_pixel = np.zeros(clock_cycles_per_pixel)
-        probe_data_per_pixel[clock_cycles_repump:] = 1              # Probe is on the last part
-        pump_data_per_pixel = np.zeros(clock_cycles_per_pixel)
+        repump_data_per_subpixel = np.zeros(clock_cycles_per_subpixel)
+        repump_data_per_subpixel[:clock_cycles_repump] = 1             # Repump is on for the first part
+        probe_data_per_subpixel = np.zeros(clock_cycles_per_subpixel)
+        probe_data_per_subpixel[clock_cycles_repump:] = 1              # Probe is on the last part
+        pump_data_per_subpixel = np.zeros(clock_cycles_per_subpixel)
         if pump:
-            pump_data_per_pixel[clock_cycles_repump:] = 1           # Pump is on the last part (if specified)
+            pump_data_per_subpixel[clock_cycles_repump:] = 1           # Pump is on the last part (if specified)
         
         # Total sequence data
-        num_samples = clock_cycles_per_pixel * num_pixels         # Total number of samples for the scan
+        num_samples = clock_cycles_per_subpixel * num_subpixels * num_pixels         # Total number of samples for the scan
         # Tile the individual pixel pulse sequence data
-        repump_data = np.tile(repump_data_per_pixel, num_pixels)  # Repeats sequence
-        probe_data  = np.tile(probe_data_per_pixel, num_pixels)  
-        pump_data   = np.tile(pump_data_per_pixel, num_pixels)   
+        repump_data = np.tile(repump_data_per_subpixel, num_subpixels * num_pixels)  # Repeats sequence
+        probe_data  = np.tile(probe_data_per_subpixel, num_subpixels * num_pixels)  
+        pump_data   = np.tile(pump_data_per_subpixel, num_subpixels * num_pixels)   
 
         # Get the voltage 
-        voltage_data_at_pixel = np.linspace(voltage_min, voltage_max, num_pixels)
-        voltage_data = np.repeat(voltage_data_at_pixel, clock_cycles_per_pixel)
+        # Currently scanning the laser during the subpixels
+        voltage_data_at_subpixel = np.linspace(voltage_min, voltage_max, num_pixels * num_subpixels)
+        voltage_data = np.repeat(voltage_data_at_subpixel, clock_cycles_per_subpixel)
         # Invert the direction if specified
         if direction == 'down':
-            voltage_data_at_pixel =  voltage_data_at_pixel[::-1]
+            voltage_data_at_subpixel =  voltage_data_at_subpixel[::-1]
             voltage_data = voltage_data[::-1]
 
         # Set up the sequencer
@@ -240,23 +244,30 @@ class PulsedPLE(SequenceControllerBase):
         self.timeout = num_samples / clock_rate + 1    # 1 extra second
 
         # Save some parameters for later use
-        self.pixel_repump_data = repump_data_per_pixel
-        self.pixel_probe_data = probe_data_per_pixel
-        self.pixel_pump_data = pump_data_per_pixel
-        self.pixel_samples = clock_cycles_per_pixel
-        self.pixel_repump_end_index = clock_cycles_repump
-        self.pixel_time = time_per_pixel
-        self.num_pixels = num_pixels
-        self.scan_time = time_per_pixel * num_pixels
+        self.subpixel_repump_data = repump_data_per_subpixel
+        self.subpixel_probe_data = probe_data_per_subpixel
+        self.subpixel_pump_data = pump_data_per_subpixel
+        self.subpixel_samples = clock_cycles_per_subpixel
+        self.subpixel_repump_end_index = clock_cycles_repump
+        self.pixel_repump_data = np.tile(repump_data_per_subpixel, num_subpixels)
+        self.pixel_probe_data = np.tile(probe_data_per_subpixel, num_subpixels)
+        self.pixel_pump_data = np.tile(pump_data_per_subpixel, num_subpixels)
+        self.pixel_samples = clock_cycles_per_subpixel * num_subpixels
+        self.voltage_data = voltage_data
 
-        '''x = np.linspace(0,time_per_pixel,clock_cycles_per_pixel)
-        plt.plot(x,repump_data_per_pixel, label='repump')
-        plt.plot(x,probe_data_per_pixel, label='probe')
-        plt.plot(x,pump_data_per_pixel, label='pump')
+        self.pixel_time = time_per_subpixel * num_subpixels
+        self.num_pixels = num_pixels
+        self.num_subpixels = num_subpixels
+        self.scan_time = time_per_subpixel * num_subpixels * num_pixels
+
+        '''x = np.linspace(0,time_per_subpixel,clock_cycles_per_subpixel)
+        plt.plot(x,repump_data_per_subpixel, label='repump')
+        plt.plot(x,probe_data_per_subpixel, label='probe')
+        plt.plot(x,pump_data_per_subpixel, label='pump')
         plt.legend()
         plt.show()
 
-        x = np.linspace(0,scan_time,clock_cycles_per_pixel*num_pixels)
+        x = np.linspace(0,self.scan_time,clock_cycles_per_subpixel*num_pixels*num_subpixels)
         plt.plot(repump_data, label='repump')
         plt.plot(probe_data, label='probe')
         plt.plot(pump_data, label='pump')
@@ -303,17 +314,19 @@ class PulsedPLE(SequenceControllerBase):
             num_pixels: int,
             repump_time: float, # in ms
             read_time: float,   # in ms
-            direction: str = 'up'
+            direction: str = 'up',
+            num_subpixels: int = 1
     ):
         # Configure the sequence
         self.configure_sequence(
-            pump        = pump,
-            voltage_min = voltage_min,
-            voltage_max = voltage_max,
-            num_pixels  = num_pixels,
-            repump_time = repump_time,
-            read_time   = read_time,
-            direction   = direction
+            pump            = pump,
+            voltage_min     = voltage_min,
+            voltage_max     = voltage_max,
+            num_pixels      = num_pixels,
+            repump_time     = repump_time,
+            read_time       = read_time,
+            direction       = direction,
+            num_subpixels   = num_subpixels
         )
 
         # Get the start value to move to between scans.
@@ -326,13 +339,14 @@ class PulsedPLE(SequenceControllerBase):
 
         # Save the configuration parameters
         self.scan_parameters = {
-            'pump'        : pump,
-            'voltage_min' : voltage_min,
-            'voltage_max' : voltage_max,
-            'num_pixels'  : num_pixels,
-            'repump_time' : repump_time,
-            'read_time'   : read_time,
-            'direction'   : direction
+            'pump'          : pump,
+            'voltage_min'   : voltage_min,
+            'voltage_max'   : voltage_max,
+            'num_pixels'    : num_pixels,
+            'repump_time'   : repump_time,
+            'read_time'     : read_time,
+            'direction'     : direction,
+            'num_subpixels' : num_subpixels
         }
 
         # Move to the start position
@@ -370,14 +384,17 @@ class PulsedPLE(SequenceControllerBase):
             self,
             data: dict[str,np.ndarray],
     ):
-        # Reshape the counter data
-        counter_data_reshaped = data[self.counter_id].reshape(self.num_pixels, self.pixel_samples)
-        # Get the raw counts during the repump/readout steps
-        raw_counter_repump = counter_data_reshaped[:,:self.pixel_repump_end_index]
-        raw_counter_read = counter_data_reshaped[:,self.pixel_repump_end_index:]
-        # Average the counts
-        avg_counter_repump = np.average(raw_counter_repump, axis=1).squeeze()
-        avg_counter_read = np.average(raw_counter_read, axis=1).squeeze()
+        # Reshape the counter data into (pixel,subpixel,samples)
+        counter_data_reshaped = data[self.counter_id].reshape(self.num_pixels, self.num_subpixels, self.subpixel_samples)
+        # Get the raw counts during the repump/readout steps for each subpixel
+        raw_subpixel_counter_repump = counter_data_reshaped[:,:,:self.subpixel_repump_end_index]
+        raw_subpixel_counter_read = counter_data_reshaped[:,:,self.subpixel_repump_end_index:]
+        # Average the counts in each subpixel
+        avg_subpixel_counter_repump = np.average(raw_subpixel_counter_repump, axis=-1)
+        avg_subpixel_counter_read = np.average(raw_subpixel_counter_read, axis=-1)
+        # Average the subpixel counts to get the single pixel data point
+        avg_pixel_counter_repump = np.average(avg_subpixel_counter_repump, axis=-1)
+        avg_pixel_counter_read = np.average(avg_subpixel_counter_read, axis=-1)
 
         # Get the frequencies
         scan_times = np.linspace(0,self.scan_time,self.num_pixels)
@@ -390,41 +407,44 @@ class PulsedPLE(SequenceControllerBase):
         freqs = interpolator(scan_times)
 
         output = {
-            'counter_data_reshaped' : counter_data_reshaped,
-            'raw_counter_repump'    : raw_counter_repump,
-            'raw_counter_read'      : raw_counter_read,
-            'avg_counter_repump'    : avg_counter_repump,
-            'avg_counter_read'      : avg_counter_read,
-            'freqs'                 : freqs,
-            'wavemeter_tags'        : tags,
-            'wavmeter_vals'         : vals
+            'counter_data_reshaped'         : counter_data_reshaped,
+            'raw_subpixel_counter_repump'   : raw_subpixel_counter_repump,
+            'raw_subpixel_counter_read'     : raw_subpixel_counter_read,
+            'avg_subpixel_counter_repump'   : avg_subpixel_counter_repump,
+            'avg_subpixel_counter_read'     : avg_subpixel_counter_read,
+            'avg_pixel_counter_repump'      : avg_pixel_counter_repump,
+            'avg_pixel_counter_read'        : avg_pixel_counter_read,
+            'freqs'                         : freqs,
+            'wavemeter_tags'                : tags,
+            'wavmeter_vals'                 : vals
         }
         output |= data
         return output
     
     def locate_peaks(
             self,
-            threshold = None
+            threshold = None,
+            distance = 0.3
     ):
         xs = self.data['freqs']
-        ys = self.data['avg_counter_read']
+        ys = self.data['avg_pixel_counter_read']
         if threshold is None:
             # estimate from the data
-            threshold = np.max(self.data['avg_counter_read']) / 2
+            threshold = np.max(self.data['avg_pixel_counter_read']) / 2
         
         # Calculate frequency spacing
-        df = np.min(np.diff(xs))
+        df = np.min(np.abs(np.diff(xs)))
         # Determine the linewidth in units of samples
-        linewidth = max(1, int(0.2/df)) # 100 Mhz / df is number of samples per homogeneous linewidth
+        linewidth = max(1, int(distance/df)) # 100 Mhz / df is number of samples per homogeneous linewidth
         peak_idxs, _ = find_peaks(ys, height=threshold, distance=linewidth)
         peak_freqs = xs[peak_idxs]
         peak_amplitudes = ys[peak_idxs]
 
         # Print frequencies
         j = 0
-        print('Peak\tfrequency (GHz)\twavelength (nm)')
+        print('Peak\tfrequency (GHz)\tvac wvl (nm)\tair wvl (nm)')
         for x in peak_freqs:
-            print(f'{j}' + '\t' + f'{x:.4f}' + '\t' + f'{299792458/x:.6f}')
+            print(f'{j}' + '\t' + f'{x:.4f}' + '\t' + f'{299792458/x:.6f}' + '\t' + f'{299792458/x/1.00027:.6f}')
             j += 1
 
         # Plot output
@@ -435,7 +455,7 @@ class PulsedPLE(SequenceControllerBase):
             peaks: tuple[float, float] = None
     ):
         fig, ax = plt.subplots(1,1,figsize=(5,4))
-        ax.plot(self.data['freqs'], self.data['avg_counter_read'])
+        ax.plot(self.data['freqs'], self.data['avg_pixel_counter_read'])
         ax.set_xlabel('Frequency (GHz)')
         ax.set_ylabel('Signal (cts/s)')
         ax.grid(alpha=0.3)
@@ -465,14 +485,16 @@ class PulsedPLE(SequenceControllerBase):
                 ds.attrs[param] =  val
 
             # Save the data for a single sequence
-            f.create_dataset('counter_data_reshaped', data=self.data['counter_data_reshaped'])
-            f.create_dataset('raw_counter_repump'   , data=self.data['raw_counter_repump'])
-            f.create_dataset('raw_counter_read'     , data=self.data['raw_counter_read'])
-            f.create_dataset('avg_counter_repump'   , data=self.data['avg_counter_repump'])
-            f.create_dataset('avg_counter_read'     , data=self.data['avg_counter_read'])
-            f.create_dataset('freqs'                , data=self.data['freqs'])
-            f.create_dataset('wavemeter_tags'       , data=self.data['wavemeter_tags'])
-            f.create_dataset('wavmeter_vals'        , data=self.data['wavmeter_vals'])
+            f.create_dataset('counter_data_reshaped'        , data=self.data['counter_data_reshaped'])
+            f.create_dataset('raw_subpixel_counter_repump'  , data=self.data['raw_subpixel_counter_repump'])
+            f.create_dataset('raw_subpixel_counter_read'    , data=self.data['raw_subpixel_counter_read'])
+            f.create_dataset('avg_subpixel_counter_repump'  , data=self.data['avg_subpixel_counter_repump'])
+            f.create_dataset('avg_subpixel_counter_read'    , data=self.data['avg_subpixel_counter_read'])
+            f.create_dataset('avg_pixel_counter_repump'     , data=self.data['avg_pixel_counter_repump'])
+            f.create_dataset('avg_pixel_counter_read'       , data=self.data['avg_pixel_counter_read'])
+            f.create_dataset('freqs'                        , data=self.data['freqs'])
+            f.create_dataset('wavemeter_tags'               , data=self.data['wavemeter_tags'])
+            f.create_dataset('wavmeter_vals'                , data=self.data['wavmeter_vals'])
 
         print('File saved.')
 
