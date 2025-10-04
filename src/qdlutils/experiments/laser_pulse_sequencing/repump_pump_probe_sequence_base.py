@@ -501,6 +501,7 @@ class RepumpPumpProbeSequenceBase(RepumpProbeSequenceBase):
     def monitor_wavemeter(
             self,
             n_samples = 60,
+            target = None
     ):
         '''
         Prints out the wavemeter reading continuously for `n_samples`.
@@ -509,6 +510,10 @@ class RepumpPumpProbeSequenceBase(RepumpProbeSequenceBase):
         for n in range(n_samples):
             # Read the initial wavelength
             time_tag, val = self.wavemeter_controller.readout()
-            print(val)
+            display.clear_output(wait=True)
+            if target is not None:
+                print(val - target)
+            else:
+                print(val)
             
         self.wavemeter_controller.close()
