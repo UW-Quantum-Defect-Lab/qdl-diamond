@@ -20,6 +20,7 @@ from qdlutils.hardware.wavemeters.wavemeters import WavemeterController
 
 from scipy.interpolate import make_smoothing_spline
 from scipy.signal import find_peaks
+from IPython import display
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -35,6 +36,8 @@ class PulsedPLE(SequenceControllerBase):
             probe_ao_config: dict,
             pump_id: str,
             pump_do_config: dict,
+            trigger_id: str,
+            trigger_do_config: dict,    # for triggering the start of a new pixel
             counter_id: str,
             counter_ci_config: dict,
             wavemeter_controller: WavemeterController,
@@ -45,12 +48,14 @@ class PulsedPLE(SequenceControllerBase):
         self.repump_id = repump_id
         self.probe_id = probe_id
         self.pump_id = pump_id
-        self.counter_id =counter_id
+        self.counter_id = counter_id
+        self.trigger_id = trigger_id
         # Save the configurations
         self.repump_do_config = repump_do_config
         self.probe_do_config = probe_do_config
         self.probe_ao_config = probe_ao_config
         self.pump_do_config = pump_do_config
+        self.trigger_do_config = trigger_do_config
         self.counter_ci_config = counter_ci_config
         # Wavemeter controller class for interfacing with the wavemeter
         self.wavemeter_controller = wavemeter_controller
@@ -67,9 +72,10 @@ class PulsedPLE(SequenceControllerBase):
         sequence_outputs = {
             'do_group' : NidaqSequencerDO32LineGroup(
                 channels_config = {
-                    repump_id : repump_do_config,
-                    probe_id  : probe_do_config,
-                    pump_id   : pump_do_config
+                    repump_id  : repump_do_config,
+                    probe_id   : probe_do_config,
+                    pump_id    : pump_do_config,
+                    trigger_id : trigger_do_config,
                 }
             ),
             'ao_group' : NidaqSequencerAOVoltageGroup(
@@ -170,7 +176,7 @@ class PulsedPLE(SequenceControllerBase):
         # Update the current position
         self.probe_voltage = setpoint
     
-    def configure_sequence(
+    def configure_sequence_type1(
             self,
             pump: bool,
             voltage_min: float,
@@ -179,8 +185,24 @@ class PulsedPLE(SequenceControllerBase):
             repump_time: float, # in ms
             read_time: float,   # in ms
             direction: str = 'up',
-            num_subpixels: int = 1
+            num_subpixels: int = 1,
+            warmup_cycles: int = 0,
     ):
+        
+        '''
+        Type 1 scan
+        Implements an overlapping pump probe sequence where both the pump and probe are on 
+        simultaneously. In this case population levels are controlled by relative powers.
+
+        ```
+            repump    __|=======|_____________________________
+
+            pump      ___________|===========================|
+
+            probe     ___________|===========================| 
+        ```
+        '''
+
         # Verify the data
         if voltage_max > voltage_min:
             self.sequencer.validate_output_data(output_name=self.probe_id+'_freq', data=voltage_min)
@@ -196,8 +218,8 @@ class PulsedPLE(SequenceControllerBase):
         if num_subpixels < 1:
             raise ValueError('# of subpixels must be at least 1')
         
-        # Clock rate is constant to give 10 us steps.
-        clock_rate = 100000 # 100 kHz
+        # Clock rate is constant to give 2 us steps.
+        clock_rate = 100000#500000 # 500 kHz
 
         # Laser pulse sequence per subpixel
         time_per_subpixel = 1e-3 * (repump_time + read_time) # in s
@@ -213,20 +235,27 @@ class PulsedPLE(SequenceControllerBase):
             pump_data_per_subpixel[clock_cycles_repump:] = 1           # Pump is on the last part (if specified)
         
         # Total sequence data
-        num_samples = clock_cycles_per_subpixel * num_subpixels * num_pixels         # Total number of samples for the scan
+        # Includes the scan data + warmup cycles
+        num_samples = clock_cycles_per_subpixel * (num_subpixels * num_pixels + warmup_cycles)    # Total number of samples for the scan
         # Tile the individual pixel pulse sequence data
-        repump_data = np.tile(repump_data_per_subpixel, num_subpixels * num_pixels)  # Repeats sequence
-        probe_data  = np.tile(probe_data_per_subpixel, num_subpixels * num_pixels)  
-        pump_data   = np.tile(pump_data_per_subpixel, num_subpixels * num_pixels)   
+        repump_data  = np.tile(repump_data_per_subpixel, num_subpixels * num_pixels + warmup_cycles)  # Repeats sequence
+        probe_data   = np.tile(probe_data_per_subpixel, num_subpixels * num_pixels + warmup_cycles)  
+        pump_data    = np.tile(pump_data_per_subpixel, num_subpixels * num_pixels + warmup_cycles)
+
+        # Generate the trigger data, is one at the start of every pixel
+        trigger_data = np.zeros(num_samples)
+        trigger_data[warmup_cycles*clock_cycles_per_subpixel::num_subpixels*clock_cycles_per_subpixel] = 1
 
         # Get the voltage 
         # Currently scanning the laser during the subpixels
-        voltage_data_at_subpixel = np.linspace(voltage_min, voltage_max, num_pixels * num_subpixels)
-        voltage_data = np.repeat(voltage_data_at_subpixel, clock_cycles_per_subpixel)
+        voltage_data_at_subpixel = np.linspace(voltage_min, voltage_max, num_pixels * num_subpixels) # Generate voltage for each subpixel
+        voltage_data = np.repeat(voltage_data_at_subpixel, clock_cycles_per_subpixel)   # Hold voltage during subpixel
         # Invert the direction if specified
         if direction == 'down':
             voltage_data_at_subpixel =  voltage_data_at_subpixel[::-1]
             voltage_data = voltage_data[::-1]
+        # Append the warm up cycles
+        voltage_data = np.concat([np.ones(warmup_cycles*clock_cycles_per_subpixel) * voltage_data[0], voltage_data])
 
         # Set up the sequencer
         self.clock_rate = clock_rate
@@ -234,14 +263,18 @@ class PulsedPLE(SequenceControllerBase):
             self.repump_id        : repump_data,
             self.probe_id         : probe_data,
             self.pump_id          : pump_data,
+            self.trigger_id       : trigger_data,
             self.probe_id+'_freq' : voltage_data
         }
         self.input_samples = {
-            self.counter_id : num_samples
+            self.counter_id : num_samples - (warmup_cycles*clock_cycles_per_subpixel) # Don't detect during warmup
         }
-        self.readout_delays = {}    # No delays
+        self.readout_delays = {
+             self.counter_id : (warmup_cycles*clock_cycles_per_subpixel) # Don't detect during warmup
+        } 
         self.soft_start = {}        # No soft start
         self.timeout = num_samples / clock_rate + 1    # 1 extra second
+
 
         # Save some parameters for later use
         self.subpixel_repump_data = repump_data_per_subpixel
@@ -254,11 +287,14 @@ class PulsedPLE(SequenceControllerBase):
         self.pixel_pump_data = np.tile(pump_data_per_subpixel, num_subpixels)
         self.pixel_samples = clock_cycles_per_subpixel * num_subpixels
         self.voltage_data = voltage_data
+        self.trigger_data = trigger_data
 
         self.pixel_time = time_per_subpixel * num_subpixels
         self.num_pixels = num_pixels
         self.num_subpixels = num_subpixels
-        self.scan_time = time_per_subpixel * num_subpixels * num_pixels
+        self.warmup_cycles = warmup_cycles
+        self.warmup_time  = warmup_cycles * time_per_subpixel
+        self.scan_time = time_per_subpixel * (num_subpixels * num_pixels + clock_cycles_per_subpixel)
 
         '''x = np.linspace(0,time_per_subpixel,clock_cycles_per_subpixel)
         plt.plot(x,repump_data_per_subpixel, label='repump')
@@ -274,39 +310,8 @@ class PulsedPLE(SequenceControllerBase):
         plt.plot(voltage_data, label='voltage')
         plt.legend()
         plt.show()'''
-
-    def _wavemeter_thread_function(
-            self,
-    ):
-        # Reads the wavemeter continuously in the thread
-        '''
-        Repeatedly queries the wavemeter for data until the flag is set to false
-        '''
-        # Set the flag to start querying the wavemeter
-        self.query_wavemeter = True
-        # Reset the current scan wavemeter output buffers
-        self.wavemeter_tags = []
-        self.wavemeter_vals = []
-        # Until the flag is set to false get the data from the wavemeter
-        while self.query_wavemeter:
-            # Try to get the data from the wavemeter
-            try:
-                # Attempt to readout the wavemeter
-                tag, val = self.wavemeter_controller.readout()
-                # Append the results if valid (zero values are not allowed)
-                if val > 100:
-                    self.wavemeter_tags.append(tag)
-                    self.wavemeter_vals.append(val)
-                else:
-                    print('Wavemeter readout error: reading value invalid')
-            # Catch excpetions (i.e. if the wavemeter hasn't gotten a new value to output yet)
-            except Exception as e:
-                raise e
-                #print('Wavemeter readout error:', e)
-            # Wait for the delay (accounts for finite delay between subsequent wavemeter readout)
-            time.sleep(0.1)
-
-    def run_scan(
+    
+    def run_scan_type1(
             self,
             pump: bool,
             voltage_min: float,
@@ -315,10 +320,11 @@ class PulsedPLE(SequenceControllerBase):
             repump_time: float, # in ms
             read_time: float,   # in ms
             direction: str = 'up',
-            num_subpixels: int = 1
+            num_subpixels: int = 1,
+            warmup_cycles: int = 0
     ):
         # Configure the sequence
-        self.configure_sequence(
+        self.configure_sequence_type1(
             pump            = pump,
             voltage_min     = voltage_min,
             voltage_max     = voltage_max,
@@ -326,7 +332,8 @@ class PulsedPLE(SequenceControllerBase):
             repump_time     = repump_time,
             read_time       = read_time,
             direction       = direction,
-            num_subpixels   = num_subpixels
+            num_subpixels   = num_subpixels,
+            warmup_cycles   = warmup_cycles
         )
 
         # Get the start value to move to between scans.
@@ -346,7 +353,8 @@ class PulsedPLE(SequenceControllerBase):
             'repump_time'   : repump_time,
             'read_time'     : read_time,
             'direction'     : direction,
-            'num_subpixels' : num_subpixels
+            'num_subpixels' : num_subpixels,
+            'warmup_cycles' : warmup_cycles
         }
 
         # Move to the start position
@@ -371,7 +379,7 @@ class PulsedPLE(SequenceControllerBase):
         self.wavemeter_controller.close()
 
         # Process the data
-        self.data = self.process_data(data=raw_sequence_data)
+        self.data = self.process_data_type1(data=raw_sequence_data)
 
         # Plot the scan
         self.plot_scan_results()
@@ -380,7 +388,7 @@ class PulsedPLE(SequenceControllerBase):
         self.probe_voltage = self.end_value
         self.set_probe_voltage_smooth(self.start_value)
 
-    def process_data(
+    def process_data_type1(
             self,
             data: dict[str,np.ndarray],
     ):
@@ -421,6 +429,268 @@ class PulsedPLE(SequenceControllerBase):
         output |= data
         return output
     
+    def configure_sequence_type2(
+            self,
+            voltage_min: float,
+            voltage_max: float,
+            num_pixels: int,
+            repump_time: float, # in ms
+            pump_time: float,   # in ms
+            probe_time: float,  # in ms
+            direction: str = 'up',
+            num_subpixels: int = 1,
+            warmup_cycles: int = 0,
+    ):
+        '''
+        Type 2 scan
+        Implements a sequential pump probe scan where a pump-probe sequence is performed at
+        each sample. If the time response cannot be resolved on the DAQ time scales then one can use
+        the Swabian time tagger histogram array experiment. A pulse on the trigger line is sent to
+        indicate the start of a new pixel.
+
+        ```
+            repump    __|=======|_____________________________
+
+            pump      ___________|===========|________________
+
+            probe     ________________________|==============| 
+        ```
+        '''
+
+        # Verify the data
+        if voltage_max > voltage_min:
+            self.sequencer.validate_output_data(output_name=self.probe_id+'_freq', data=voltage_min)
+            self.sequencer.validate_output_data(output_name=self.probe_id+'_freq', data=voltage_max)
+        else:
+            raise ValueError(f'Requested max {voltage_max:.3f} is less than min {voltage_min:.3f}.')
+        if num_pixels < 1:
+            raise ValueError('# pixels must be greater than 1.')
+        if pump_time < 0 or pump_time > 10000:
+            raise ValueError('Pump time must be between more than 0 and less than 10 second.')
+        if probe_time < 0 or probe_time > 10000:
+            raise ValueError('Probe time must be between more than 0 and less than 10 second.')
+        if repump_time < 0 or repump_time > 10000:
+            raise ValueError('Repump time must be non-negative and less than 10 seconds.') 
+        if num_subpixels < 1:
+            raise ValueError('# of subpixels must be at least 1')
+        
+        # Clock rate is constant to give 2 us steps.
+        clock_rate = 500000 # 500 kHz
+
+        # Laser pulse sequence per subpixel
+        time_per_subpixel = 1e-3 * (repump_time + pump_time + probe_time) # in s
+        clock_cycles_per_subpixel = int(clock_rate * time_per_subpixel)
+        clock_cycles_repump = int(1e-3 * repump_time * clock_rate)
+        clock_cycles_pump = int(1e-3 * pump_time * clock_rate)
+        # Generate the data
+        repump_data_per_subpixel = np.zeros(clock_cycles_per_subpixel)
+        repump_data_per_subpixel[:clock_cycles_repump] = 1                  # Repump is on for the first part
+        pump_data_per_subpixel = np.zeros(clock_cycles_per_subpixel)
+        pump_data_per_subpixel[clock_cycles_repump:(clock_cycles_repump+clock_cycles_pump)] = 1 
+        probe_data_per_subpixel = np.zeros(clock_cycles_per_subpixel)
+        probe_data_per_subpixel[(clock_cycles_repump+clock_cycles_pump):] = 1 # Probe is on the last part
+
+        # Total sequence data
+        # Includes the scan data + warmup cycles
+        num_samples = clock_cycles_per_subpixel * (num_subpixels * num_pixels + warmup_cycles)    # Total number of samples for the scan
+        # Tile the individual pixel pulse sequence data
+        repump_data  = np.tile(repump_data_per_subpixel, num_subpixels * num_pixels + warmup_cycles)  # Repeats sequence
+        probe_data   = np.tile(probe_data_per_subpixel, num_subpixels * num_pixels + warmup_cycles)  
+        pump_data    = np.tile(pump_data_per_subpixel, num_subpixels * num_pixels + warmup_cycles)
+
+        # Generate the trigger data, is one at the start of every pixel
+        trigger_data = np.zeros(num_samples)
+        trigger_data[warmup_cycles*clock_cycles_per_subpixel::num_subpixels*clock_cycles_per_subpixel] = 1
+
+        # Get the voltage 
+        # Currently scanning the laser during the subpixels
+        voltage_data_at_subpixel = np.linspace(voltage_min, voltage_max, num_pixels * num_subpixels) # Generate voltage for each subpixel
+        voltage_data = np.repeat(voltage_data_at_subpixel, clock_cycles_per_subpixel)   # Hold voltage during subpixel
+        # Invert the direction if specified
+        if direction == 'down':
+            voltage_data_at_subpixel =  voltage_data_at_subpixel[::-1]
+            voltage_data = voltage_data[::-1]
+        # Append the warm up cycles
+        voltage_data = np.concat([np.ones(warmup_cycles*clock_cycles_per_subpixel) * voltage_data[0], voltage_data])
+
+        # Set up the sequencer
+        self.clock_rate = clock_rate
+        self.output_data = {
+            self.repump_id        : repump_data,
+            self.probe_id         : probe_data,
+            self.pump_id          : pump_data,
+            self.trigger_id       : trigger_data,
+            self.probe_id+'_freq' : voltage_data
+        }
+        self.input_samples = {
+            self.counter_id : num_samples - (warmup_cycles*clock_cycles_per_subpixel) # Don't detect during warmup
+        }
+        self.readout_delays = {
+             self.counter_id : (warmup_cycles*clock_cycles_per_subpixel) # Don't detect during warmup
+        } 
+        self.soft_start = {}        # No soft start
+        self.timeout = num_samples / clock_rate + 1    # 1 extra second
+
+        # Save some parameters for later use
+        self.subpixel_repump_data = repump_data_per_subpixel
+        self.subpixel_probe_data = probe_data_per_subpixel
+        self.subpixel_pump_data = pump_data_per_subpixel
+        self.subpixel_samples = clock_cycles_per_subpixel
+        self.subpixel_repump_end_index = clock_cycles_repump
+        self.subpixel_pump_end_index = clock_cycles_repump + clock_cycles_pump
+        self.pixel_repump_data = np.tile(repump_data_per_subpixel, num_subpixels)
+        self.pixel_probe_data = np.tile(probe_data_per_subpixel, num_subpixels)
+        self.pixel_pump_data = np.tile(pump_data_per_subpixel, num_subpixels)
+        self.pixel_samples = clock_cycles_per_subpixel * num_subpixels
+        self.voltage_data = voltage_data
+        self.trigger_data = trigger_data
+
+        self.pixel_time = time_per_subpixel * num_subpixels
+        self.num_pixels = num_pixels
+        self.num_subpixels = num_subpixels
+        self.warmup_cycles = warmup_cycles
+        self.warmup_time  = warmup_cycles * time_per_subpixel
+        self.scan_time = time_per_subpixel * (num_subpixels * num_pixels + clock_cycles_per_subpixel)
+
+        # x = np.linspace(0,time_per_subpixel,clock_cycles_per_subpixel)
+        # plt.plot(x,repump_data_per_subpixel, label='repump')
+        # plt.plot(x,probe_data_per_subpixel+1, label='probe')
+        # plt.plot(x,pump_data_per_subpixel+2, label='pump')
+        # plt.legend()
+        # plt.show()
+
+        # x = np.linspace(0,self.scan_time,clock_cycles_per_subpixel*num_pixels*num_subpixels)
+        # plt.plot(repump_data, label='repump')
+        # plt.plot(probe_data+1, label='probe')
+        # plt.plot(pump_data+2, label='pump')
+        # plt.plot(voltage_data+3, label='voltage')
+        # plt.plot(trigger_data+4, label='trigger')
+        # plt.legend()
+        # plt.show()
+
+    def run_scan_type2(
+            self,
+            voltage_min: float,
+            voltage_max: float,
+            num_pixels: int,
+            repump_time: float, # in ms
+            pump_time: float,   # in ms
+            probe_time: float,  # in ms
+            direction: str = 'up',
+            num_subpixels: int = 1,
+            warmup_cycles: int = 0,
+    ):
+        # Configure the sequence
+        self.configure_sequence_type2(
+            voltage_min     = voltage_min,
+            voltage_max     = voltage_max,
+            num_pixels      = num_pixels,
+            repump_time     = repump_time,
+            pump_time       = pump_time,
+            probe_time      = probe_time,
+            direction       = direction,
+            num_subpixels   = num_subpixels,
+            warmup_cycles   = warmup_cycles,
+        )
+
+        # Get the start value to move to between scans.
+        self.start_value = voltage_min
+        self.end_value = voltage_max
+        if direction == 'down':
+            # Invert the direction if specified
+            self.start_value = voltage_max
+            self.end_value = voltage_min
+
+        # Save the configuration parameters
+        self.scan_parameters = {
+            'voltage_min'     : voltage_min,
+            'voltage_max'     : voltage_max,
+            'num_pixels'      : num_pixels,
+            'repump_time'     : repump_time,
+            'pump_time'       : pump_time,
+            'probe_time'      : probe_time,
+            'direction'       : direction,
+            'num_subpixels'   : num_subpixels,
+            'warmup_cycles'   : warmup_cycles,
+        }
+
+        # Move to the start position
+        self.set_probe_voltage_smooth(self.start_value)
+        time.sleep(2) # Wait for the voltage and wavemeter to settle.
+
+        # Start the wavemeter
+        self.wavemeter_controller.open()
+        # Start the wavemeter thread
+        wavemeter_thread = threading.Thread(target=self._wavemeter_thread_function)
+        wavemeter_thread.start()
+
+        # Run the sequence
+        raw_sequence_data = self._run_sequence()
+
+        # Stop the wavemeter thread by setting the flag
+        self.query_wavemeter = False
+        # Wait for the wavemeter thread to end -- this pauses the main thread until it finishes
+        wavemeter_thread.join()
+        # Close the wavemeter
+        self.wavemeter_controller.close()
+
+        # Process the data
+        self.data = self.process_data_type2(data=raw_sequence_data)
+
+        # Plot the scan
+        self.plot_scan_results()
+
+        # Return to start voltage
+        self.probe_voltage = self.end_value
+        self.set_probe_voltage_smooth(self.start_value)
+
+    def process_data_type2(
+            self,
+            data: dict[str,np.ndarray],
+    ):
+        # Reshape the counter data into (pixel,subpixel,samples)
+        counter_data_reshaped = data[self.counter_id].reshape(self.num_pixels, self.num_subpixels, self.subpixel_samples)
+        # Get the raw counts during the repump/readout steps for each subpixel
+        raw_subpixel_counter_repump = counter_data_reshaped[:,:,:self.subpixel_repump_end_index]
+        raw_subpixel_counter_pump = counter_data_reshaped[:,:,self.subpixel_repump_end_index:self.subpixel_pump_end_index]
+        raw_subpixel_counter_read = counter_data_reshaped[:,:,self.subpixel_pump_end_index:]
+        # Average the counts in each subpixel
+        avg_subpixel_counter_repump = np.average(raw_subpixel_counter_repump, axis=-1)
+        avg_subpixel_counter_pump = np.average(raw_subpixel_counter_pump, axis=-1)
+        avg_subpixel_counter_read = np.average(raw_subpixel_counter_read, axis=-1)
+        # Average the subpixel counts to get the single pixel data point
+        avg_pixel_counter_repump = np.average(avg_subpixel_counter_repump, axis=-1)
+        avg_pixel_counter_pump = np.average(avg_subpixel_counter_pump, axis=-1)
+        avg_pixel_counter_read = np.average(avg_subpixel_counter_read, axis=-1)
+
+        # Get the frequencies
+        scan_times = np.linspace(0,self.scan_time,self.num_pixels) + self.warmup_time # Ignore the warmup
+        tags = np.array(self.wavemeter_tags)
+        vals = np.array(self.wavemeter_vals)
+        # Zero the time tags and rescale to seconds
+        tags = (tags - tags[0]) * 0.01 # units are in 10 ms
+        # Generate the interpolator and interpolate the frequenices
+        interpolator = make_smoothing_spline(tags,vals)
+        freqs = interpolator(scan_times)
+
+        output = {
+            'counter_data_reshaped'         : counter_data_reshaped,
+            'raw_subpixel_counter_repump'   : raw_subpixel_counter_repump,
+            'raw_subpixel_counter_pump'     : raw_subpixel_counter_pump,
+            'raw_subpixel_counter_read'     : raw_subpixel_counter_read,
+            'avg_subpixel_counter_repump'   : avg_subpixel_counter_repump,
+            'avg_subpixel_counter_pump'     : avg_subpixel_counter_pump,
+            'avg_subpixel_counter_read'     : avg_subpixel_counter_read,
+            'avg_pixel_counter_repump'      : avg_pixel_counter_repump,
+            'avg_pixel_counter_pump'        : avg_pixel_counter_pump,
+            'avg_pixel_counter_read'        : avg_pixel_counter_read,
+            'freqs'                         : freqs,
+            'wavemeter_tags'                : tags,
+            'wavmeter_vals'                 : vals
+        }
+        output |= data
+        return output
+    
     def locate_peaks(
             self,
             threshold = None,
@@ -433,7 +703,7 @@ class PulsedPLE(SequenceControllerBase):
             threshold = np.max(self.data['avg_pixel_counter_read']) / 2
         
         # Calculate frequency spacing
-        df = np.min(np.abs(np.diff(xs)))
+        df = np.mean(np.abs(np.diff(xs)))
         # Determine the linewidth in units of samples
         linewidth = max(1, int(distance/df)) # 100 Mhz / df is number of samples per homogeneous linewidth
         peak_idxs, _ = find_peaks(ys, height=threshold, distance=linewidth)
@@ -449,6 +719,38 @@ class PulsedPLE(SequenceControllerBase):
 
         # Plot output
         self.plot_scan_results(peaks = (peak_freqs, peak_amplitudes))
+
+    def locate_dips(
+            self,
+            threshold = None,
+            distance = 0.3
+    ):
+        xs = self.data['freqs']
+        ys = self.data['avg_pixel_counter_read']
+        if threshold is None:
+            # estimate from the data
+            threshold = np.max(self.data['avg_pixel_counter_read']) / 2
+        # Invert to get peaks
+        ys_peaks = threshold - ys
+        
+        # Calculate frequency spacing
+        df = np.mean(np.abs(np.diff(xs)))
+        # Determine the linewidth in units of samples
+        linewidth = max(1, int(distance/df)) # 100 Mhz / df is number of samples per homogeneous linewidth
+        peak_idxs, _ = find_peaks(ys_peaks, height=0, distance=linewidth)
+        peak_freqs = xs[peak_idxs]
+        peak_amplitudes = ys[peak_idxs]
+
+        # Print frequencies
+        j = 0
+        print('Peak\tfrequency (GHz)\tvac wvl (nm)\tair wvl (nm)')
+        for x in peak_freqs:
+            print(f'{j}' + '\t' + f'{x:.4f}' + '\t' + f'{299792458/x:.6f}' + '\t' + f'{299792458/x/1.00027:.6f}')
+            j += 1
+
+        # Plot output
+        self.plot_scan_results(peaks = (peak_freqs, peak_amplitudes))
+
 
     def plot_scan_results(
             self,
@@ -470,9 +772,28 @@ class PulsedPLE(SequenceControllerBase):
     def save(
             self,
             filename: str,
+            light: bool = False
     ):
         # Add the extension
         fname = filename+'.hdf5'
+
+        # Blacklist for light saves
+        blacklist = [
+            'counter_data_reshaped'      ,
+            'raw_subpixel_counter_repump',
+            'raw_subpixel_counter_pump'  ,
+            'raw_subpixel_counter_read'  ,
+            'avg_subpixel_counter_repump',
+            'avg_subpixel_counter_pump'  ,
+            'avg_subpixel_counter_read'  ,
+            'avg_pixel_counter_repump'   ,
+            'green_laser',
+            'pump_laser',
+            'red_laser',
+            'red_laser_freq',
+            'spcm_rate',
+            'trigger',
+        ]
 
         # Save as hdf5
         print(f'Saving data as `{fname}`.')
@@ -485,16 +806,63 @@ class PulsedPLE(SequenceControllerBase):
                 ds.attrs[param] =  val
 
             # Save the data for a single sequence
-            f.create_dataset('counter_data_reshaped'        , data=self.data['counter_data_reshaped'])
-            f.create_dataset('raw_subpixel_counter_repump'  , data=self.data['raw_subpixel_counter_repump'])
-            f.create_dataset('raw_subpixel_counter_read'    , data=self.data['raw_subpixel_counter_read'])
-            f.create_dataset('avg_subpixel_counter_repump'  , data=self.data['avg_subpixel_counter_repump'])
-            f.create_dataset('avg_subpixel_counter_read'    , data=self.data['avg_subpixel_counter_read'])
-            f.create_dataset('avg_pixel_counter_repump'     , data=self.data['avg_pixel_counter_repump'])
-            f.create_dataset('avg_pixel_counter_read'       , data=self.data['avg_pixel_counter_read'])
-            f.create_dataset('freqs'                        , data=self.data['freqs'])
-            f.create_dataset('wavemeter_tags'               , data=self.data['wavemeter_tags'])
-            f.create_dataset('wavmeter_vals'                , data=self.data['wavmeter_vals'])
+            for key, val in self.data.items():
+
+                if (key in blacklist) and (light is True):
+                    pass
+                else:
+                    f.create_dataset(key, data=val)
 
         print('File saved.')
 
+    def _wavemeter_thread_function(
+            self,
+    ):
+        # Reads the wavemeter continuously in the thread
+        '''
+        Repeatedly queries the wavemeter for data until the flag is set to false
+        '''
+        # Set the flag to start querying the wavemeter
+        self.query_wavemeter = True
+        # Reset the current scan wavemeter output buffers
+        self.wavemeter_tags = []
+        self.wavemeter_vals = []
+        # Until the flag is set to false get the data from the wavemeter
+        while self.query_wavemeter:
+            # Try to get the data from the wavemeter
+            try:
+                # Attempt to readout the wavemeter
+                tag, val = self.wavemeter_controller.readout()
+                # Append the results if valid (zero values are not allowed)
+                if val > 100:
+                    self.wavemeter_tags.append(tag)
+                    self.wavemeter_vals.append(val)
+                else:
+                    print('Wavemeter readout error: reading value invalid')
+            # Catch excpetions (i.e. if the wavemeter hasn't gotten a new value to output yet)
+            except Exception as e:
+                raise e
+                #print('Wavemeter readout error:', e)
+            # Wait for the delay (accounts for finite delay between subsequent wavemeter readout)
+            time.sleep(0.1)
+
+
+    def monitor_wavemeter(
+            self,
+            n_samples = 60,
+            target = None
+    ):
+        '''
+        Prints out the wavemeter reading continuously for `n_samples`.
+        '''
+        self.wavemeter_controller.open()
+        for n in range(n_samples):
+            # Read the initial wavelength
+            time_tag, val = self.wavemeter_controller.readout()
+            display.clear_output(wait=True)
+            if target is not None:
+                print(val - target)
+            else:
+                print(val)
+            
+        self.wavemeter_controller.close()

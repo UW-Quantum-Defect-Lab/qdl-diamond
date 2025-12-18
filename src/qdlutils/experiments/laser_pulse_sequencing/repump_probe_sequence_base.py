@@ -878,6 +878,24 @@ class RepumpProbeSequenceBase(SequenceControllerBase):
         return signal * (c0 + c1*(delta-Delta))
 
 
-
+    def monitor_wavemeter(
+            self,
+            n_samples = 60,
+            target = None
+    ):
+        '''
+        Prints out the wavemeter reading continuously for `n_samples`.
+        '''
+        self.wavemeter_controller.open()
+        for n in range(n_samples):
+            # Read the initial wavelength
+            time_tag, val = self.wavemeter_controller.readout()
+            display.clear_output(wait=True)
+            if target is not None:
+                print(val - target)
+            else:
+                print(val)
+            
+        self.wavemeter_controller.close()
 
 

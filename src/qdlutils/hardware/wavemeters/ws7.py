@@ -2,17 +2,23 @@ import serial
 import time
 import logging
 
+import qdlutils.hardware.wavemeters.wlmData as wlmData
+import qdlutils.hardware.wavemeters.wlmConst as wlmConst
+
 from qdlutils.hardware.wavemeters.wavemeters import WavemeterController
 
-class BurleighWA1600(WavemeterController):
+class WS7(WavemeterController):
 
     '''
-    Class for interfacing with the Burleigh WA-1600 wavemeter via RS-232 serial connection.
+    Class for interfacing with the WS7 High Finesse wavemeter using their provided API.
+
+    NOTE: In order for this class to work you must open the wavemeter via the provided GUI
+    application and then start data collection. If you stop it, then the return values appear to
+    just be the last read value.
     '''
 
     def __init__(
             self,
-            port: str='COM1',
             timeout: float=2,
             units: str='FREQ',
             mode: str='READ'
@@ -20,8 +26,6 @@ class BurleighWA1600(WavemeterController):
         '''
         Parameters
         ----------
-        port : str
-            A string for the communication port on which to open the serial channel.
         timeout : float
             Length of time in seconds to wait for a readout
         units : str
@@ -32,32 +36,34 @@ class BurleighWA1600(WavemeterController):
             next scan to complete and outputs the value, 'FETC' = fetch which returns the last 
             read value (if queried too quickly can return a repeat measurement value).
         '''
-        self.port = port
         self.timeout = timeout
         self.units = units
         self.mode = mode
         self.channel_open = False
-        # Serial port object
-        self.ser = None
+
+        # Load the library
+        # I honestly have no idea what is going on here but it seems to work... Taken from
+        # the 35share/Python/vasilis/codes_for_experiments on Dropbox.
+        wlmData.LoadDLL('wlmData.dll')
+        self.lib = wlmData.dll
+
+        # Get the return type:
+        if units == 'WAV':
+            self.unit_id = wlmConst.cReturnWavelengthAir
+        elif units == 'WNUM':
+            self.unit_id = wlmConst.cReturnWavenumber
+        elif units == 'FREQ':
+            self.unit_id = wlmConst.cReturnFrequency
+        else:
+            self.unit_id = wlmConst.cReturnWavelengthVac
+
         # Time reference
         self.start_time = None
-
-        # Form the readout command
-        self.read_cmd = (':'+mode+':'+units+'?\n').encode('utf-8')
 
     def open(self):
         '''
         Opens a serial connection on the specified port to talk with the wavemeter
         '''
-        self.ser = serial.Serial(
-            port=self.port,
-            baudrate=9600,
-            parity=serial.PARITY_NONE,
-            stopbits=serial.STOPBITS_ONE,
-            bytesize=serial.EIGHTBITS,
-            xonxoff=True,
-            timeout=self.timeout,
-        )
         # Flag channel as open
         self.channel_open = True
         # Get the start time
@@ -67,7 +73,6 @@ class BurleighWA1600(WavemeterController):
         '''
         Closes the serial connection.
         '''
-        self.ser.close()
         self.channel_open = False
 
     def readout(self):
@@ -86,14 +91,14 @@ class BurleighWA1600(WavemeterController):
             The current output value in the current units set on the tool. May not match the units
             in the software if the user has manually changed it after initialization.
         '''
-        # Write the query command to the channel
-        self.ser.write(self.read_cmd)
-        # Read the next line, remove the newline
-        if self.ser.readline().strip() == b'':
+        # Read the raw data, can be an error if the output is < 0
+        raw = self.lib.GetWavelength(0.0)
+        if raw < 0:
             data = 0
         else:
-            data = float(self.ser.readline().strip())
-        
+            # Convert from default value to target unit
+            data = self.lib.ConvertUnit(raw, wlmConst.cReturnWavelengthVac, self.unit_id)
+            data = float( data ) * 1000
         # Get the current time
         current_time = int(time.time() * 100) # In units of 10 ms
         # Return the data with timetag referenced to the channel opening
@@ -111,8 +116,12 @@ class BurleighWA1600(WavemeterController):
             The current output value in the current units set on the tool. May not match the units
             in the software if the user has manually changed it after initialization.
         '''
-        # Write the query command to the channel
-        self.ser.write(self.read_cmd)
-        # Read the next line, remove the newline
-        data = self.ser.readline().strip()
-        return float(data)
+        # Read the raw data, can be an error if the output is < 0
+        raw = self.lib.GetWavelength(0.0)
+        if raw < 0:
+            data = 0
+        else:
+            # Convert from default value to target unit
+            data = self.lib.ConvertUnit(raw, wlmConst.cReturnWavelengthVac, self.unit_id)
+            data = float( data ) * 1000
+        return data
