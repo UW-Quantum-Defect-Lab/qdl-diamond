@@ -36,7 +36,8 @@ class SequenceControllerBase:
             inputs: dict[str,NidaqSequencerInputGroup],
             outputs: dict[str,NidaqSequencerOutputGroup],
             clock_device: str = 'Dev1',
-            clock_channel: str = 'port0',
+            clock_channel: str = 'ctr0',
+            clock_terminal: str = 'PFI12'
     ):
         '''
         This method initializes the SequenceController class, creates the sequencer that manages 
@@ -58,13 +59,15 @@ class SequenceControllerBase:
                     outputs: dict[str,NidaqSequencerOutput],
                     scan_laser_id: str,
                     clock_device: str = 'Dev1',
-                    clock_channel: str = 'port0',
+                    clock_channel: str = 'ctr0',
+                    clock_terminal: str = 'PFI12'
                 ):
                     super().__init__(
                         inputs = inputs,
                         outputs = outputs,
                         clock_device = clock_device,
                         clock_channel = clock_channel,
+                        clock_terminal = clock_terminal
                     )
                     self.scan_laser_id = scan_laser_id
         ```
@@ -87,13 +90,15 @@ class SequenceControllerBase:
         self.outputs = outputs
         self.clock_device = clock_device
         self.clock_channel  = clock_channel
+        self.clock_terminal = clock_terminal
 
         # Instantiate the sequencer
         self.sequencer = NidaqSequencer(
             inputs = inputs,
             outputs = outputs,
             clock_device = clock_device,
-            clock_channel = clock_channel
+            clock_channel = clock_channel,
+            clock_terminal = clock_terminal
         )
 
         # Other attributes to be utilized later

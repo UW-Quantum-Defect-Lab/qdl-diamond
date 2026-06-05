@@ -7,6 +7,8 @@ import qdlutils.applications.qdlple2.main as qdlple2
 import qdlutils.applications.qdlscan.main as qdlscan
 import qdlutils.applications.qdlscope.main as qdlscope
 
+from qdlutils.hardware.nidaq.digitaloutputs.nidaqdigitalline import NidaqDigitalLineController
+
 logger = logging.getLogger(__name__)
 logging.basicConfig()
 
@@ -51,6 +53,16 @@ class HomeApplication:
         self.view.qdlple2_button.bind('<Button>', self.open_qdlple2)
         self.view.qdlscan_button.bind('<Button>', self.open_qdlscan)
         self.view.qdlscope_button.bind('<Button>', self.open_qdlscope)
+
+        # Bind the quick toggles
+        self.view.repump_laser_toggle.config(command=self.toggle_repump_laser)
+        self.view.scan_laser_toggle.config(command=self.toggle_scan_laser)
+        self.view.pump_laser_toggle.config(command=self.toggle_pump_laser)
+
+        # Create the DO line output controllers
+        self.repump_do_line = NidaqDigitalLineController(device='Dev1', port='port0', line='line0')
+        self.scan_do_line = NidaqDigitalLineController(device='Dev1', port='port0', line='line1')
+        self.pump_do_line = NidaqDigitalLineController(device='Dev1', port='port0', line='line2')
 
     def run(self) -> None:
         '''
@@ -102,6 +114,62 @@ class HomeApplication:
             logger.warning(f'{e}')
 
 
+    # Methods for toggling
+    def toggle_repump_laser(
+            self
+    ) -> None:
+        '''
+        Callback to toggle the repump laser.
+        '''
+        try: 
+            # If the GUI toggle is on and no direct command `cmd` given
+            # OR if the direct command is True then turn on the laser
+            if (self.view.repump_laser_on.get() == 1):
+                logger.info('Turning repump laser on.')
+                self.repump_do_line.set_value(True)
+            elif (self.view.repump_laser_on.get() == 0):
+                logger.info('Turning repump laser off.')
+                self.repump_do_line.set_value(False)
+        except Exception as e:
+            logger.error(f'Repump laser could not be toggled: {e}')
+
+    def toggle_scan_laser(
+            self
+    ) -> None:
+        '''
+        Callback to toggle the scan laser. 
+        '''
+        try: 
+            # If the GUI toggle is on and no direct command `cmd` given
+            # OR if the direct command is True then turn on the laser
+            if (self.view.scan_laser_on.get() == 1):
+                logger.info('Turning repump laser on.')
+                self.scan_do_line.set_value(True)
+            elif (self.view.scan_laser_on.get() == 0):
+                logger.info('Turning repump laser off.')
+                self.scan_do_line.set_value(False)
+        except Exception as e:
+            logger.error(f'Scan laser could not be toggled: {e}')
+
+    def toggle_pump_laser(
+            self
+    ) -> None:
+        '''
+        Callback to toggle the pump laser. 
+        '''
+        try: 
+            # If the GUI toggle is on and no direct command `cmd` given
+            # OR if the direct command is True then turn on the laser
+            if (self.view.pump_laser_on.get() == 1):
+                logger.info('Turning repump laser on.')
+                self.pump_do_line.set_value(True)
+            elif (self.view.pump_laser_on.get() == 0):
+                logger.info('Turning repump laser off.')
+                self.pump_do_line.set_value(False)
+        except Exception as e:
+            logger.error(f'Scan laser could not be toggled: {e}')
+    
+
 class HomeApplicationView:
     '''
     Main application GUI view
@@ -134,6 +202,33 @@ class HomeApplicationView:
         row += 1
         self.qdlscope_button = tk.Button(app_frame, text='qdlscope', width=20)
         self.qdlscope_button.grid(row=row, column=0, columnspan=2, pady=5)
+
+        # Add some quick DAQ controls
+        row += 1
+        tk.Label(app_frame, 
+                 text='DAQ outputs', 
+                 font='Helvetica 14').grid(row=row, column=0, pady=[20,5], columnspan=2)
+        # Toggle for the repump laser
+        row += 1
+        self.repump_laser_on = tk.IntVar()
+        self.repump_laser_toggle_label = tk.Label(app_frame, text='Toggle repump laser')
+        self.repump_laser_toggle_label.grid(row=row, column=0, pady=[5,0])
+        self.repump_laser_toggle = tk.Checkbutton ( app_frame, var=self.repump_laser_on)
+        self.repump_laser_toggle.grid(row=row, column=1, pady=[5,0])
+        # Toggle for the scan laser
+        row += 1
+        self.scan_laser_on = tk.IntVar()
+        self.scan_laser_toggle_label = tk.Label(app_frame, text='Toggle scan laser')
+        self.scan_laser_toggle_label.grid(row=row, column=0, pady=[0,0])
+        self.scan_laser_toggle = tk.Checkbutton ( app_frame, var=self.scan_laser_on)
+        self.scan_laser_toggle.grid(row=row, column=1, pady=[0,0])
+        # Toggle for the pump laser
+        row += 1
+        self.pump_laser_on = tk.IntVar()
+        self.pump_laser_toggle_label = tk.Label(app_frame, text='Toggle pump laser')
+        self.pump_laser_toggle_label.grid(row=row, column=0, pady=[0,0])
+        self.pump_laser_toggle = tk.Checkbutton ( app_frame, var=self.pump_laser_on)
+        self.pump_laser_toggle.grid(row=row, column=1, pady=[0,0])
 
 def main():
     tkapp = HomeApplication()
